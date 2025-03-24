@@ -17,6 +17,8 @@ load_dotenv()
 class PrivacyScraper:
     def __init__(self):
         self.scraper = cloudscraper.create_scraper()
+        self.scraper.cookies.clear()  # Limpa cookies persistentes
+        self.scraper.headers = {}
         self.email = os.getenv('EMAIL')
         self.password = os.getenv('PASSWORD')
         self.token_v1 = None
@@ -26,6 +28,7 @@ class PrivacyScraper:
         login_url = "https://service.privacy.com.br/auth/login"
         login_data = {
             "Email": self.email,
+            "Document": None,
             "Password": self.password,
             "Locale": "pt-BR",
             "CanReceiveEmail": True
@@ -84,7 +87,9 @@ class MediaDownloader:
         self.scraper = scraper
 
     def download_file(self, url, filename, pbar=None):
-        headers = {"referer": "https://privacy.com.br/"}
+        headers = {
+            "Referer": "https://privacy.com.br/",
+        }
         try:
             response = self.scraper.get(url, headers=headers, stream=True)
             if response.status_code == 200:
@@ -128,18 +133,22 @@ class MediaDownloader:
 
             lines = content.split('\n')
             modified_content = []
+            key_counter = 1
+            
             for line in lines:
-                if line.startswith('#EXT-X-KEY'):
+                # Processa chaves de sessão e segmentos
+                if line.startswith('#EXT-X-SESSION-KEY') or line.startswith('#EXT-X-KEY'):
                     uri_match = re.search(r'URI="([^"]+)"', line)
                     if uri_match:
                         key_url = uri_match.group(1)
                         original_key_name = os.path.basename(urllib.parse.urlparse(key_url).path)
-                        new_key_name = f"{original_key_name}.ts"
+                        new_key_name = f"key_{key_counter}.key"
                         key_path = os.path.join(base_path, new_key_name)
                         
                         if self.download_file(key_url, key_path):
                             new_line = line.replace(uri_match.group(0), f'URI="{new_key_name}"')
                             modified_content.append(new_line)
+                            key_counter += 1
                 elif line.strip() and not line.startswith('#'):
                     segment_url = urllib.parse.urljoin(m3u8_url, line.strip())
                     segment_filename = os.path.join(base_path, os.path.basename(segment_url))
@@ -197,7 +206,6 @@ class MediaDownloader:
 
 def main():
     privacy_scraper = PrivacyScraper()
-
     if privacy_scraper.login():
         profiles = privacy_scraper.get_profiles()
         if profiles:
