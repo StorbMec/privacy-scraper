@@ -290,10 +290,28 @@ def main():
             for idx, profile in enumerate(profiles):
                 print(f"{idx + 1} - {profile}")
 
-            selected_idx = int(input("Selecione o número do profile desejado (0 para todos): "))
-            selected_profiles = profiles if selected_idx == 0 else [profiles[selected_idx - 1]]
-
-            media_type = input("Selecione o tipo de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos): ")
+            while True:
+                try:
+                    selected_idx = int(input("Selecione o número do profile desejado (0 para todos): "))
+                    
+                    if selected_idx == 0:
+                        selected_profiles = profiles
+                        break
+                    elif 1 <= selected_idx <= len(profiles):
+                        selected_profiles = [profiles[selected_idx - 1]]
+                        break
+                    else:
+                        print(f"Erro: Digite um número entre 0 e {len(profiles)}")
+                        
+                except ValueError:
+                    print("Erro: Digite apenas números!")
+            
+            while True:
+                media_input = input("Selecione o tipo de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos): ")
+                if media_input in {'1', '2', '3'}:
+                    media_type = media_input
+                    break
+                print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
 
             media_downloader = MediaDownloader(privacy_scraper.cffi_session, privacy_scraper)
             for selected_profile_name in selected_profiles:
