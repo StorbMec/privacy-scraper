@@ -1,0 +1,5 @@
+ffmpeg-python
+python-dotenv
+beautifulsoup4
+tqdm
+curl-cffi
