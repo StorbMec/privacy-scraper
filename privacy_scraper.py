@@ -13,6 +13,10 @@ from curl_cffi import requests as cffi_requests
 if not shutil.which("ffmpeg"):
     raise Exception("FFmpeg não encontrado. Instale e adicione ao PATH: https://ffmpeg.org/download.html")
 
+if not os.path.isfile('.env'):
+        print("Erro: Arquivo .env não encontrado!")
+        exit(1)
+
 load_dotenv()
 
 class PrivacyScraper:
@@ -152,8 +156,8 @@ class MediaDownloader:
                 "sec-ch-ua-platform": '"Windows"',
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
                 "sec-ch-ua": '"Brave";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                "x-content-uri": urllib.parse.quote(url.split('/hls/')[1]),  # Mantém a extensão .ts
-                "content": token_data['content'],  # Já deve vir codificado do servidor
+                "x-content-uri": urllib.parse.quote(url.split('/hls/')[1]),
+                "content": token_data['content'],
                 "sec-ch-ua-mobile": "?0",
                 "Accept": "*/*",
                 "Sec-GPC": "1",
@@ -243,8 +247,6 @@ class MediaDownloader:
 
     def convert_m3u8_to_mp4(self, input_file, output_file):
         try:
-            print(f"Convertendo {input_file} para MP4...")
-            
             if not os.path.exists(input_file):
                 raise FileNotFoundError(f"Arquivo de entrada não encontrado: {input_file}")
 
