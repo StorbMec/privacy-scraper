@@ -39,3 +39,6 @@ python privacy_scraper.py
 5. Em "Variáveis do sistema", selecione Path > Editar > Novo
 
 6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
+
+## Contato
+discord: st8rb 
