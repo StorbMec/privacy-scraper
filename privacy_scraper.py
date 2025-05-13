@@ -14,8 +14,8 @@ if not shutil.which("ffmpeg"):
     raise Exception("FFmpeg não encontrado. Instale e adicione ao PATH: https://ffmpeg.org/download.html")
 
 if not os.path.isfile('.env'):
-        print("Erro: Arquivo .env não encontrado!")
-        exit(1)
+    print("Erro: Arquivo .env não encontrado!")
+    exit(1)
 
 load_dotenv()
 
@@ -48,11 +48,11 @@ class PrivacyScraper:
         }
 
         response = self.cffi_session.post(
-                login_url,
-                json=login_data,
-                headers=headers,
-                impersonate="chrome120"
-            )
+            login_url,
+            json=login_data,
+            headers=headers,
+            impersonate="chrome120"
+        )
 
         if response.status_code == 200:
             tokens = response.json()
@@ -60,13 +60,12 @@ class PrivacyScraper:
             self.token_v2 = tokens.get("token")
             
             headers_second = {
-            "Host": "privacy.com.br",
-            "Referer": "https://privacy.com.br/auth?route=sign-in",
+                "Host": "privacy.com.br",
+                "Referer": "https://privacy.com.br/auth?route=sign-in",
             }
 
             second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
             response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
-            print(response.text)
             if response.status_code == 200:
                 return True
             else:
@@ -158,32 +157,46 @@ class MediaDownloader:
         }
 
         if is_video:
-            file_id = url.split('/')[3]
-            token_data = self.privacy_scraper.get_video_token(file_id)
-            
-            if not token_data:
-                print(f"Falha ao obter token para o vídeo {file_id}")
-                return False
-            
-            headers.update({
-                "Host": "video.privacy.com.br",
-                "Connection": "keep-alive",
-                "sec-ch-ua-platform": '"Windows"',
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                "sec-ch-ua": '"Brave";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                "x-content-uri": urllib.parse.quote(url.split('/hls/')[1]),
-                "content": token_data['content'],
-                "sec-ch-ua-mobile": "?0",
-                "Accept": "*/*",
-                "Sec-GPC": "1",
-                "Accept-Language": "pt-BR,pt;q=0.6",
-                "Origin": "https://privacy.com.br",
-                "Sec-Fetch-Site": "same-site",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Dest": "empty",
-                "Referer": "https://privacy.com.br/",
-                "Accept-Encoding": "gzip, deflate, br, zstd"
-            })
+            if '.mp4' in url:  # Download direto de MP4
+                headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                    "Sec-Fetch-Mode": "no-cors",
+                    "Sec-Fetch-Dest": "video",
+                    "Range": "bytes=0-"
+                })
+            else:  # Processamento HLS
+                if '/hls/' not in url:
+                    print(f"URL de vídeo inválida: {url}")
+                    return False
+
+                split_result = url.split('/hls/', 1)
+                file_id = split_result[0].split('/')[-1]
+                content_uri_part = split_result[1]
+
+                token_data = self.privacy_scraper.get_video_token(file_id)
+                
+                if not token_data:
+                    print(f"Falha ao obter token para o vídeo {file_id}")
+                    return False
+                
+                headers.update({
+                    "Host": "video.privacy.com.br",
+                    "Connection": "keep-alive",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                    "sec-ch-ua": '"Brave";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                    "x-content-uri": urllib.parse.quote(content_uri_part),
+                    "content": token_data['content'],
+                    "sec-ch-ua-mobile": "?0",
+                    "Accept": "*/*",
+                    "Sec-GPC": "1",
+                    "Accept-Language": "pt-BR,pt;q=0.6",
+                    "Origin": "https://privacy.com.br",
+                    "Sec-Fetch-Site": "same-site",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Dest": "empty",
+                    "Accept-Encoding": "gzip, deflate, br, zstd"
+                })
 
         try:
             response = self.cffi_session.get(
@@ -191,7 +204,7 @@ class MediaDownloader:
                 headers=headers,
                 impersonate="chrome120",
             )
-            if response.status_code == 200:
+            if response.status_code == 200 or response.status_code == 206:
                 with open(filename, 'wb') as f:
                     f.write(response.content)
                     if pbar:
@@ -366,26 +379,31 @@ def main():
                                             if media_downloader.download_file(file_url, filename, pbar):
                                                 downloaded_photos += 1
                                         elif file_type == "video" and media_type in ["2", "3"]:
-                                            base_path = f"./{selected_profile_name}/videos/{file['mediaId']}_temp"
-                                            os.makedirs(base_path, exist_ok=True)
-                                            main_m3u8_filename = os.path.join(base_path, "main.m3u8")
+                                            if '.mp4' in file_url:
+                                                filename = f"./{selected_profile_name}/videos/{file['mediaId']}.mp4"
+                                                if media_downloader.download_file(file_url, filename, pbar, is_video=True):
+                                                    downloaded_videos += 1
+                                            else:
+                                                base_path = f"./{selected_profile_name}/videos/{file['mediaId']}_temp"
+                                                os.makedirs(base_path, exist_ok=True)
+                                                main_m3u8_filename = os.path.join(base_path, "main.m3u8")
 
-                                            if media_downloader.download_file(file_url, main_m3u8_filename, pbar, is_video=True):
-                                                with open(main_m3u8_filename, 'r', encoding='utf-8') as f:
-                                                    main_m3u8_content = f.read()
+                                                if media_downloader.download_file(file_url, main_m3u8_filename, pbar, is_video=True):
+                                                    with open(main_m3u8_filename, 'r', encoding='utf-8') as f:
+                                                        main_m3u8_content = f.read()
 
-                                                best_quality_url = media_downloader.get_best_quality_m3u8(file_url, main_m3u8_content)
-                                                if best_quality_url:
-                                                    best_m3u8_filename = media_downloader.process_m3u8(best_quality_url, base_path)
-                                                    
-                                                    if best_m3u8_filename and os.path.exists(best_m3u8_filename):
-                                                        output_filename = f"./{selected_profile_name}/videos/{file['mediaId']}.mp4"
+                                                    best_quality_url = media_downloader.get_best_quality_m3u8(file_url, main_m3u8_content)
+                                                    if best_quality_url:
+                                                        best_m3u8_filename = media_downloader.process_m3u8(best_quality_url, base_path)
                                                         
-                                                        if media_downloader.convert_m3u8_to_mp4(best_m3u8_filename, output_filename):
-                                                            downloaded_videos += 1
-                                                            pbar.update(1)
+                                                        if best_m3u8_filename and os.path.exists(best_m3u8_filename):
+                                                            output_filename = f"./{selected_profile_name}/videos/{file['mediaId']}.mp4"
+                                                            
+                                                            if media_downloader.convert_m3u8_to_mp4(best_m3u8_filename, output_filename):
+                                                                downloaded_videos += 1
+                                                                pbar.update(1)
 
-                                            media_downloader.clean_temp_files(base_path)
+                                                media_downloader.clean_temp_files(base_path)
                         else:
                             print(f"Falha ao buscar mosaico: {response.status_code}")
 
