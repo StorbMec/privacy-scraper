@@ -90,19 +90,34 @@ class PrivacyScraper:
             return []
 
     def get_total_media_count(self, profile_name):
-        url = f"https://privacy.com.br/profile/{profile_name}/Mosaico"
+        url = f"https://privacy.com.br/profile/{profile_name}"
         response = self.cffi_session.get(url, impersonate="chrome120")
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            total_match = soup.find('a', class_='filter-button selected')
-            photos_match = soup.find('a', href=f"/profile/{profile_name}/Fotos")
-            videos_match = soup.find('a', href=f"/profile/{profile_name}/Videos")
+            filters = soup.find_all('a', {'data-filter': True})
+            
+            counts = {
+                'total': 0,
+                'photos': 0,
+                'videos': 0,
+                'paid': 0
+            }
+            
+            for filt in filters:
+                text = filt.get_text(strip=True)
+                count = int(re.search(r'\d+', text).group()) if re.search(r'\d+', text) else 0
+                
+                filter_type = filt['data-filter']
+                if filter_type == 'mosaico':
+                    counts['total'] = count
+                elif filter_type == 'fotos':
+                    counts['photos'] = count
+                elif filter_type == 'videos':
+                    counts['videos'] = count
+                elif filter_type == 'pagos':
+                    counts['paid'] = count
 
-            total = int(total_match.text.split()[0]) if total_match else 0
-            photos = int(photos_match.text.split()[0]) if photos_match else 0
-            videos = int(videos_match.text.split()[0]) if videos_match else 0
-
-            return total, photos, videos
+            return counts['total'], counts['photos'], counts['videos']
         return 0, 0, 0
     
     def get_video_token(self, file_id):
