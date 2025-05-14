@@ -104,8 +104,12 @@ class PrivacyScraper:
             
             for filt in filters:
                 text = filt.get_text(strip=True)
-                count = int(re.search(r'\d+', text).group()) if re.search(r'\d+', text) else 0
-                
+                match = re.search(r'([\d.]+)\s*', text)
+                if match:
+                    count = int(match.group(1).replace('.', ''))
+                else:
+                    count = 0
+                    
                 filter_type = filt['data-filter']
                 if filter_type == 'mosaico':
                     counts['total'] = count
@@ -157,14 +161,14 @@ class MediaDownloader:
         }
 
         if is_video:
-            if '.mp4' in url:  # Download direto de MP4
+            if '.mp4' in url:
                 headers.update({
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
                     "Sec-Fetch-Mode": "no-cors",
                     "Sec-Fetch-Dest": "video",
                     "Range": "bytes=0-"
                 })
-            else:  # Processamento HLS
+            else:
                 if '/hls/' not in url:
                     print(f"URL de vídeo inválida: {url}")
                     return False
@@ -291,7 +295,6 @@ class MediaDownloader:
                 .run()
             )
             
-            print(f"Conversão concluída: {output_file}")
             return True
             
         except ffmpeg.Error as e:
