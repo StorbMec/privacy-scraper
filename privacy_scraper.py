@@ -278,6 +278,7 @@ class MediaDownloader:
         return None
 
     def convert_m3u8_to_mp4(self, input_file, output_file):
+        start_time = time.time()
         try:
             if not os.path.exists(input_file):
                 raise FileNotFoundError(f"Arquivo de entrada não encontrado: {input_file}")
@@ -288,8 +289,8 @@ class MediaDownloader:
                 ffmpeg
                 .input(input_file, allowed_extensions='ALL')
                 .output(output_file, 
-                        vcodec='libx264', 
-                        acodec='aac',
+                        vcodec='copy',
+                        acodec='copy',
                         loglevel='error')
                 .overwrite_output()
                 .run()
