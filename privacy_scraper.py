@@ -104,9 +104,9 @@ class PrivacyScraper:
             
             for filt in filters:
                 text = filt.get_text(strip=True)
-                match = re.search(r'([\d.]+)\s*', text)
+                match = re.search(r'([\d,]+)\s*', text)
                 if match:
-                    count = int(match.group(1).replace('.', ''))
+                    count = int(match.group(1).replace(',', '').replace('.', ''))
                 else:
                     count = 0
                     
