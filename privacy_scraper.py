@@ -10,6 +10,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from curl_cffi import requests as cffi_requests
 
+# ──────────────────────────────────────────────────────────────
+# Pré‑requisitos
+# ──────────────────────────────────────────────────────────────
 if not shutil.which("ffmpeg"):
     raise Exception("FFmpeg não encontrado. Instale e adicione ao PATH: https://ffmpeg.org/download.html")
 
@@ -19,407 +22,488 @@ if not os.path.isfile('.env'):
 
 load_dotenv()
 
+# ──────────────────────────────────────────────────────────────
+# Converte URL da chave .key no manifesto .m3u8
+# ──────────────────────────────────────────────────────────────
+
+def key_to_m3u8(url_key: str) -> str:
+    """Converte a URL da chave AES (.key) no manifesto HLS (.m3u8).
+
+    Espera formato:
+      https://keyaes.privacy.com.br/keys/{profile}/{file_id}/{timestamp}/keyaes.key
+    → https://video.privacy.com.br/hls/{profile}/{file_id}/{timestamp}/main.m3u8
+    """
+    parts = urllib.parse.urlparse(url_key)
+    path_parts = parts.path.split("/")
+    # Verifica se segue o padrão esperado /keys/<profile>/<file_id>/<ts>/keyaes.key
+    if len(path_parts) >= 5 and path_parts[1] == "keys":
+        profile, file_id, ts = path_parts[2:5]
+        return f"https://video.privacy.com.br/hls/{profile}/{file_id}/{ts}/main.m3u8"
+    # Caso o formato seja diferente, devolve inalterado
+    return url_key
+
+# ──────────────────────────────────────────────────────────────
+# 1.  Scraper de login / navegação
+# ──────────────────────────────────────────────────────────────
 class PrivacyScraper:
+    """Centraliza autenticação e chamadas à API do privacy.com.br."""
+
     def __init__(self):
         self.cffi_session = cffi_requests.Session()
         self.email = os.getenv('EMAIL')
         self.password = os.getenv('PASSWORD')
-        self.token_v1 = None
-        self.token_v2 = None
+        self.token_v1: str | None = None
+        self.token_v2: str | None = None
 
-    def login(self):
+    # ─────────────── login ───────────────
+    def login(self) -> bool:
         login_url = "https://service.privacy.com.br/auth/login"
-        login_data = {
+        payload = {
             "Email": self.email,
-            "Document": None,
             "Password": self.password,
             "Locale": "pt-BR",
-            "CanReceiveEmail": True
+            "CanReceiveEmail": True,
         }
-
         headers = {
-            'Host': 'service.privacy.com.br',
-            'Accept': 'application/json, text/plain, */*',
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-            'Sec-GPC': '1',
-            'Origin': 'https://privacy.com.br',
-            'Referer': 'https://privacy.com.br/',
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+            "Origin": "https://privacy.com.br",
+            "Referer": "https://privacy.com.br/",
         }
 
-        response = self.cffi_session.post(
-            login_url,
-            json=login_data,
-            headers=headers,
-            impersonate="chrome120"
+        resp = self.cffi_session.post(login_url, json=payload, headers=headers, impersonate="chrome120")
+        if resp.status_code != 200:
+            print(f"Falha no login: {resp.status_code}")
+            return False
+
+        tokens = resp.json()
+        self.token_v1 = tokens.get("tokenV1")
+        self.token_v2 = tokens.get("token")
+
+        second_url = (
+            "https://privacy.com.br/strangler/Authorize"
+            f"?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
         )
-
-        if response.status_code == 200:
-            tokens = response.json()
-            self.token_v1 = tokens.get("tokenV1")
-            self.token_v2 = tokens.get("token")
-            
-            headers_second = {
-                "Host": "privacy.com.br",
-                "Referer": "https://privacy.com.br/auth?route=sign-in",
-            }
-
-            second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
-            response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
-            if response.status_code == 200:
-                return True
-            else:
-                print(f"Falha na segunda requisição: {response.status_code}")
-        else:
-            print(f"Falha no login: {response.status_code}")
+        second_headers = {
+            "Host": "privacy.com.br",
+            "Referer": "https://privacy.com.br/auth?route=sign-in",
+        }
+        second = self.cffi_session.get(second_url, headers=second_headers, impersonate="chrome120")
+        if second.status_code == 200:
+            return True
+        print(f"Falha na segunda requisição: {second.status_code}")
         return False
-
-    def get_profiles(self):
-        headers_profile = {
-            "authorization": f"Bearer {self.token_v2}",
-        }
-        profile_url = "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=30&nickName="
-
-        response = self.cffi_session.get(profile_url, headers=headers_profile, impersonate="chrome120")
-        if response.status_code == 200:
-            profiles = response.json()
-            return [profile["profileName"] for profile in profiles]
-        else:
-            print(f"Falha ao obter perfis: {response.status_code}")
-            return []
-
-    def get_total_media_count(self, profile_name):
-        url = f"https://privacy.com.br/profile/{profile_name}"
-        response = self.cffi_session.get(url, impersonate="chrome120")
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            filters = soup.find_all('a', {'data-filter': True})
-            
-            counts = {
-                'total': 0,
-                'photos': 0,
-                'videos': 0,
-                'paid': 0
-            }
-            
-            for filt in filters:
-                text = filt.get_text(strip=True)
-                match = re.search(r'([\d,]+)\s*', text)
-                if match:
-                    count = int(match.group(1).replace(',', '').replace('.', ''))
-                else:
-                    count = 0
-                    
-                filter_type = filt['data-filter']
-                if filter_type == 'mosaico':
-                    counts['total'] = count
-                elif filter_type == 'fotos':
-                    counts['photos'] = count
-                elif filter_type == 'videos':
-                    counts['videos'] = count
-                elif filter_type == 'pagos':
-                    counts['paid'] = count
-
-            return counts['total'], counts['photos'], counts['videos']
-        return 0, 0, 0
     
-    def get_video_token(self, file_id):
-        token_url = "https://service.privacy.com.br/media/video/token"
-        data = {
-            "file_id": file_id,
-            "exp": 3600
-        }
+    # ─────────────── listagem de perfis ───────────────
+    def get_profiles(self) -> list[str]:
+        headers = {"authorization": f"Bearer {self.token_v2}"}
+        url = "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=30&nickName="
+        resp = self.cffi_session.get(url, headers=headers, impersonate="chrome120")
+        if resp.status_code != 200:
+            print(f"Falha ao obter perfis: {resp.status_code}")
+            return []
+        data = resp.json()
+        return [p["profileName"] for p in data]
 
-        headers = {
+    # ─────────────── contagem de mídias ───────────────
+    def get_total_media_count(self, profile_name: str) -> tuple[int, int, int]:
+        url = f"https://privacy.com.br/profile/{profile_name}"
+        resp = self.cffi_session.get(url, impersonate="chrome120")
+        if resp.status_code != 200:
+            return 0, 0, 0
+        soup = BeautifulSoup(resp.text, "html.parser")
+        counts = {"total": 0, "photos": 0, "videos": 0}
+        for a in soup.find_all("a", {"data-filter": True}):
+            txt = a.get_text(strip=True)
+            m = re.search(r"([\d,.]+)", txt)
+            n = int(m.group(1).replace(".", "").replace(",", "")) if m else 0
+            fld = a["data-filter"]
+            if fld == "mosaico":
+                counts["total"] = n
+            elif fld == "fotos":
+                counts["photos"] = n
+            elif fld == "videos":
+                counts["videos"] = n
+        return counts["total"], counts["photos"], counts["videos"]
+
+    # ─────────────── listagem completa de posts ───────────────
+    def fetch_all_posts(self, profile_name: str, page_size: int = 10) -> list[dict]:
+        """Retorna todas as entradas de 'mosaicItems' de um perfil."""
+        posts: list[dict] = []
+        skip = 0
+        while True:
+            ts = int(time.time() * 1000)
+            url = (
+                "https://privacy.com.br/Profile?handler=PartialPosts"
+                f"&skip={skip}&take={page_size}&nomePerfil={profile_name}"
+                f"&filter=mosaico&_={ts}"
+            )
+            r = self.cffi_session.get(url, impersonate="chrome120")
+            if r.status_code != 200:
+                break
+            batch = r.json().get("mosaicItems", [])
+            if not batch:
+                break
+            posts.extend(batch)
+            skip += page_size
+        return posts
+
+    # ─────────────── token de vídeo ───────────────
+    def get_video_token(self, file_id: str):
+        token_url = "https://service.privacy.com.br/media/video/token"
+        data = {"file_id": file_id, "exp": 3600}
+        hdrs = {
             "Host": "service.privacy.com.br",
             "Authorization": f"Bearer {self.token_v2}",
             "Content-Type": "application/json",
             "Origin": "https://privacy.com.br",
             "Referer": "https://privacy.com.br/",
         }
+        r = self.cffi_session.post(token_url, json=data, headers=hdrs, impersonate="chrome120")
+        return r.json() if r.status_code == 200 else None
 
-        response = self.cffi_session.post(
-            token_url,
-            json=data,
-            headers=headers,
-            impersonate="chrome120"
-        )
 
-        if response.status_code == 200:
-            return response.json()
-        return None
-
+# ──────────────────────────────────────────────────────────────
+# 2.  Downloader (fotos / vídeos)
+# ──────────────────────────────────────────────────────────────
 class MediaDownloader:
-    def __init__(self, cffi_session, privacy_scraper):
+    def __init__(self, cffi_session, privacy_scraper: PrivacyScraper):
         self.cffi_session = cffi_session
-        self.privacy_scraper = privacy_scraper
+        self.scraper = privacy_scraper
 
-    def download_file(self, url, filename, pbar=None, is_video=False):
+    # ─────────────── download bruto ───────────────
+    def download_file(self, url: str, filename: str, pbar: tqdm | None = None, is_video: bool = False) -> bool:
         headers = {
             "Referer": "https://privacy.com.br/",
-            "Origin": "https://privacy.com.br"
+            "Origin": "https://privacy.com.br",
         }
-
-        if is_video:
-            if '.mp4' in url:
-                headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                    "Sec-Fetch-Mode": "no-cors",
-                    "Sec-Fetch-Dest": "video",
-                    "Range": "bytes=0-"
-                })
-            else:
-                if '/hls/' not in url:
-                    print(f"URL de vídeo inválida: {url}")
-                    return False
-
-                split_result = url.split('/hls/', 1)
-                file_id = split_result[0].split('/')[-1]
-                content_uri_part = split_result[1]
-
-                token_data = self.privacy_scraper.get_video_token(file_id)
-                
-                if not token_data:
-                    print(f"Falha ao obter token para o vídeo {file_id}")
-                    return False
-                
-                headers.update({
-                    "Host": "video.privacy.com.br",
-                    "Connection": "keep-alive",
-                    "sec-ch-ua-platform": '"Windows"',
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                    "sec-ch-ua": '"Brave";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                    "x-content-uri": urllib.parse.quote(content_uri_part),
-                    "content": token_data['content'],
-                    "sec-ch-ua-mobile": "?0",
-                    "Accept": "*/*",
-                    "Sec-GPC": "1",
-                    "Accept-Language": "pt-BR,pt;q=0.6",
-                    "Origin": "https://privacy.com.br",
-                    "Sec-Fetch-Site": "same-site",
-                    "Sec-Fetch-Mode": "cors",
-                    "Sec-Fetch-Dest": "empty",
-                    "Accept-Encoding": "gzip, deflate, br, zstd"
-                })
-
-        try:
-            response = self.cffi_session.get(
-                url,
-                headers=headers,
-                impersonate="chrome120",
-            )
-            if response.status_code == 200 or response.status_code == 206:
-                with open(filename, 'wb') as f:
-                    f.write(response.content)
-                    if pbar:
-                        pbar.update(1)
-                return True
-            else:
-                print(f"Falha ao baixar {filename}: Status {response.status_code}")
+        if is_video and ".mp4" not in url:
+            # é HLS – precisa token
+            if "/hls/" not in url:
+                print(f"URL de vídeo inválida: {url}")
                 return False
+            file_id = url.split("/hls/")[0].split("/")[-1]
+            part = url.split("/hls/", 1)[1]
+            token = self.scraper.get_video_token(file_id)
+            if not token:
+                print(f"Falha ao obter token para o vídeo {file_id}")
+                return False
+            headers.update(
+                {
+                    "Host": "video.privacy.com.br",
+                    "x-content-uri": urllib.parse.quote(part),
+                    "content": token["content"],
+                    "User-Agent": "Mozilla/5.0",
+                }
+            )
+        try:
+            r = self.cffi_session.get(url, headers=headers, impersonate="chrome120")
+            if r.status_code not in (200, 206):
+                print(f"Falha ao baixar {filename}: {r.status_code}")
+                return False
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, "wb") as f:
+                f.write(r.content)
+            if pbar:
+                pbar.update(1)
+            return True
         except Exception as e:
-            print(f"Erro ao baixar o arquivo: {e}")
+            print(f"Erro ao baixar {url}: {e}")
             return False
 
-    def get_best_quality_m3u8(self, main_m3u8_url, main_m3u8_content):
-        lines = main_m3u8_content.split('\n')
-        best_quality_url = None
-        max_bandwidth = 0
-        current_bandwidth = 0
-        for line in lines:
-            if line.startswith('#EXT-X-STREAM-INF'):
-                bandwidth_match = re.search(r'BANDWIDTH=(\d+)', line)
-                if bandwidth_match:
-                    current_bandwidth = int(bandwidth_match.group(1))
-            elif line.strip() and not line.startswith('#'):
-                if current_bandwidth > max_bandwidth:
-                    max_bandwidth = current_bandwidth
-                    best_quality_url = urllib.parse.urljoin(main_m3u8_url, line.strip())
+    # ─────────────── m3u8 util ───────────────
+    @staticmethod
+    def _best_quality_m3u8(master_url: str, master_text: str) -> str | None:
+        """Escolhe a variante com maior BANDWIDTH de um master playlist HLS."""
+        best, max_bw, current_bw = None, 0, 0
+        for ln in master_text.splitlines():
+            if ln.startswith("#EXT-X-STREAM-INF"):
+                m = re.search(r"BANDWIDTH=(\d+)", ln)
+                current_bw = int(m.group(1)) if m else 0
+            elif ln.strip() and not ln.startswith("#"):
+                if current_bw > max_bw:
+                    max_bw = current_bw
+                    best = urllib.parse.urljoin(master_url, ln.strip())
+        return best
 
-        return best_quality_url
+    # ──────────────────────────────────────────────────────────
+    #  Processa (e baixa localmente) um playlist .m3u8
+    # ──────────────────────────────────────────────────────────
+    def _process_m3u8(self, m3u8_url: str, base_path: str) -> str | None:
+        """Baixa a árvore HLS inteira para `base_path` e devolve o caminho
+        do playlist local (já reescrito para apontar para arquivos locais)."""
+        m3u8_local = os.path.join(base_path, "playlist.m3u8")
+        if not self.download_file(m3u8_url, m3u8_local, is_video=True):
+            return None
 
-    def process_m3u8(self, m3u8_url, base_path):
-        m3u8_filename = os.path.join(base_path, "playlist.m3u8")
-        if self.download_file(m3u8_url, m3u8_filename, is_video=True):
-            with open(m3u8_filename, 'r', encoding='utf-8') as f:
-                content = f.read()
+        with open(m3u8_local, "r", encoding="utf-8") as fh:
+            content = fh.read()
 
-            lines = content.split('\n')
-            modified_content = []
-            key_counter = 1
-            
-            for line in lines:
-                if line.startswith('#EXT-X-SESSION-KEY') or line.startswith('#EXT-X-KEY'):
-                    uri_match = re.search(r'URI="([^"]+)"', line)
-                    if uri_match:
-                        key_url = uri_match.group(1)
-                        original_key_name = os.path.basename(urllib.parse.urlparse(key_url).path)
-                        new_key_name = f"key_{key_counter}.key"
-                        key_path = os.path.join(base_path, new_key_name)
-                        
-                        if self.download_file(key_url, key_path):
-                            new_line = line.replace(uri_match.group(0), f'URI="{new_key_name}"')
-                            modified_content.append(new_line)
-                            key_counter += 1
-                elif line.strip() and not line.startswith('#'):
-                    segment_url = urllib.parse.urljoin(m3u8_url, line.strip())
-                    segment_filename = os.path.join(base_path, os.path.basename(segment_url))
-                    if self.download_file(segment_url, segment_filename):
-                        modified_content.append(os.path.basename(segment_filename))
-                    else:
-                        modified_content.append(line)
-                else:
-                    modified_content.append(line)
+        modified: list[str] = []
+        for ln in content.splitlines():
+            # ─── chave AES ───
+            if ln.startswith("#EXT-X-KEY"):
+                uri = re.search(r'URI="([^"]+)"', ln)
+                if uri:
+                    key_url = uri.group(1)
+                    key_name = os.path.basename(urllib.parse.urlparse(key_url).path)
+                    # chave NÃO precisa de token, logo is_video = False
+                    self.download_file(key_url, os.path.join(base_path, key_name))
+                    ln = ln.replace(uri.group(1), key_name)
+                modified.append(ln)
+            # ─── segmento de vídeo ───
+            elif ln.strip() and not ln.startswith("#"):
+                seg_url = urllib.parse.urljoin(m3u8_url, ln.strip())
+                seg_name = os.path.basename(seg_url)
+                self.download_file(seg_url, os.path.join(base_path, seg_name), is_video=True)
+                modified.append(seg_name)
+            else:
+                modified.append(ln)
 
-            with open(m3u8_filename, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(modified_content))
+        with open(m3u8_local, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(modified))
 
-            return m3u8_filename
-        return None
+        return m3u8_local
 
-    def convert_m3u8_to_mp4(self, input_file, output_file):
-        start_time = time.time()
+    # ─────────────── conversão HLS → MP4 ───────────────
+    @staticmethod
+    def _convert_hls(input_m3u8: str, output_mp4: str) -> bool:
         try:
-            if not os.path.exists(input_file):
-                raise FileNotFoundError(f"Arquivo de entrada não encontrado: {input_file}")
-
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
+            os.makedirs(os.path.dirname(output_mp4), exist_ok=True)
             (
-                ffmpeg
-                .input(input_file, allowed_extensions='ALL')
-                .output(output_file, 
-                        vcodec='copy',
-                        acodec='copy',
-                        loglevel='error')
+                ffmpeg.input(input_m3u8, allowed_extensions="ALL")
+                .output(output_mp4, vcodec="copy", acodec="copy", loglevel="error")
                 .overwrite_output()
                 .run()
             )
-            
             return True
-            
         except ffmpeg.Error as e:
-            print("Erro na conversão do vídeo:")
-            print(e.stderr.decode() if e.stderr else "Erro desconhecido")
-            return False
-            
-        except Exception as e:
-            print(f"Erro geral na conversão: {str(e)}")
+            print("Erro FFmpeg:", e.stderr.decode() if e.stderr else "UNKNOWN")
             return False
 
-    def clean_temp_files(self, base_path):
+    @staticmethod
+    def _clean(path: str):
+        """Remove diretório temporário sem lançar exceções."""
         try:
-            shutil.rmtree(base_path)
-        except Exception as e:
-            print(f"Erro ao remover arquivos temporários: {e}")
+            shutil.rmtree(path)
+        except Exception:
+            pass
+
+    # ─────────────── wrapper alto nível para HLS ───────────────
+    def handle_hls(
+        self,
+        master_url: str,
+        media_id: str,
+        out_dir: str,
+        pbar: tqdm | None = None,
+    ):
+        """Baixa e converte um vídeo HLS para MP4."""
+        base = os.path.join(out_dir, f"{media_id}_temp")
+        os.makedirs(base, exist_ok=True)
+
+        # Baixa o master playlist
+        main_m3u8 = os.path.join(base, "main.m3u8")
+        if not self.download_file(master_url, main_m3u8, pbar, is_video=True):
+            self._clean(base)
+            return
+
+        # Escolhe a melhor variante
+        with open(main_m3u8, "r", encoding="utf-8") as fh:
+            master_text = fh.read()
+        best_url = self._best_quality_m3u8(master_url, master_text)
+        if not best_url:
+            print("Falha ao localizar variante de melhor qualidade para", media_id)
+            self._clean(base)
+            return
+
+        # Desce a árvore, reescrevendo as URLs para locais
+        local_playlist = self._process_m3u8(best_url, base)
+        if not local_playlist:
+            self._clean(base)
+            return
+
+        # Converte para MP4
+        final_mp4 = os.path.join(out_dir, f"{media_id}.mp4")
+        if self._convert_hls(local_playlist, final_mp4) and pbar:
+            pbar.update(1)
+        
+        # Limpeza
+        self._clean(base)
+
+# ──────────────────────────────────────────────────────────────
+# 3.  Entrypoint / CLI
+# ──────────────────────────────────────────────────────────────
 
 def main():
-    privacy_scraper = PrivacyScraper()
-    if privacy_scraper.login():
-        profiles = privacy_scraper.get_profiles()
-        if profiles:
-            print("Perfis disponíveis:")
-            for idx, profile in enumerate(profiles):
-                print(f"{idx + 1} - {profile}")
-
-            while True:
-                try:
-                    selected_idx = int(input("Selecione o número do profile desejado (0 para todos): "))
-                    
-                    if selected_idx == 0:
-                        selected_profiles = profiles
-                        break
-                    elif 1 <= selected_idx <= len(profiles):
-                        selected_profiles = [profiles[selected_idx - 1]]
-                        break
-                    else:
-                        print(f"Erro: Digite um número entre 0 e {len(profiles)}")
-                        
-                except ValueError:
-                    print("Erro: Digite apenas números!")
-            
-            while True:
-                media_input = input("Selecione o tipo de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos): ")
-                if media_input in {'1', '2', '3'}:
-                    media_type = media_input
-                    break
-                print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
-
-            media_downloader = MediaDownloader(privacy_scraper.cffi_session, privacy_scraper)
-            for selected_profile_name in selected_profiles:
-                print(f"Processando perfil: {selected_profile_name}")
-
-                total, total_photos, total_videos = privacy_scraper.get_total_media_count(selected_profile_name)
-                print(f"Total de mídias: {total} (Fotos: {total_photos}, Vídeos: {total_videos})")
-
-                os.makedirs(f"./{selected_profile_name}/fotos", exist_ok=True)
-                os.makedirs(f"./{selected_profile_name}/videos", exist_ok=True)
-
-                skip = 0
-                downloaded_photos = 0
-                downloaded_videos = 0
-                with tqdm(total=total_photos + total_videos, desc="Progresso total") as pbar:
-                    while True:
-                        unix_timestamp = int(time.time() * 1000)
-                        third_url = f"https://privacy.com.br/Profile?handler=PartialPosts&skip={skip}&take=10&nomePerfil={selected_profile_name}&filter=mosaico&_={unix_timestamp}"
-                        response = privacy_scraper.cffi_session.get(
-                            third_url,
-                            impersonate="chrome120"
-                        )
-
-                        if response.status_code == 200:
-                            response_data = response.json()
-                            if not response_data.get("mosaicItems"):
-                                break
-
-                            for item in response_data.get("mosaicItems", []):
-                                for file in item.get("files", []):
-                                    if not file["isLocked"]:
-                                        file_type = file["type"]
-                                        file_url = file["url"]
-
-                                        if file_type == "image" and media_type in ["1", "3"]:
-                                            filename = f"./{selected_profile_name}/fotos/{file['mediaId']}.jpg"
-                                            if media_downloader.download_file(file_url, filename, pbar):
-                                                downloaded_photos += 1
-                                        elif file_type == "video" and media_type in ["2", "3"]:
-                                            if '.mp4' in file_url:
-                                                filename = f"./{selected_profile_name}/videos/{file['mediaId']}.mp4"
-                                                if media_downloader.download_file(file_url, filename, pbar, is_video=True):
-                                                    downloaded_videos += 1
-                                            else:
-                                                base_path = f"./{selected_profile_name}/videos/{file['mediaId']}_temp"
-                                                os.makedirs(base_path, exist_ok=True)
-                                                main_m3u8_filename = os.path.join(base_path, "main.m3u8")
-
-                                                if media_downloader.download_file(file_url, main_m3u8_filename, pbar, is_video=True):
-                                                    with open(main_m3u8_filename, 'r', encoding='utf-8') as f:
-                                                        main_m3u8_content = f.read()
-
-                                                    best_quality_url = media_downloader.get_best_quality_m3u8(file_url, main_m3u8_content)
-                                                    if best_quality_url:
-                                                        best_m3u8_filename = media_downloader.process_m3u8(best_quality_url, base_path)
-                                                        
-                                                        if best_m3u8_filename and os.path.exists(best_m3u8_filename):
-                                                            output_filename = f"./{selected_profile_name}/videos/{file['mediaId']}.mp4"
-                                                            
-                                                            if media_downloader.convert_m3u8_to_mp4(best_m3u8_filename, output_filename):
-                                                                downloaded_videos += 1
-                                                                pbar.update(1)
-
-                                                media_downloader.clean_temp_files(base_path)
-                        else:
-                            print(f"Falha ao buscar mosaico: {response.status_code}")
-
-                        skip += 10
-                        if skip >= total:
-                            break
-
-                print(f"Download concluído para {selected_profile_name}. Fotos: {downloaded_photos}, Vídeos: {downloaded_videos}")
-        else:
-            print("Nenhum perfil encontrado.")
-    else:
+    scraper = PrivacyScraper()
+    if not scraper.login():
         print("Falha no login.")
+        return
+
+    profiles = scraper.get_profiles()
+    if not profiles:
+        print("Nenhum perfil encontrado.")
+        return
+
+    print("Perfis disponíveis:")
+    for idx, p in enumerate(profiles, 1):
+        print(f"{idx} - {p}")
+
+    # ─────────── seleção de perfil ───────────
+    while True:
+        try:
+            sel = int(input("Selecione o número do profile desejado (0 para todos): "))
+            if sel == 0:
+                selected_profiles = profiles
+                break
+            elif 1 <= sel <= len(profiles):
+                selected_profiles = [profiles[sel - 1]]
+                break
+            print(f"Erro: Digite de 0 a {len(profiles)}")
+        except ValueError:
+            print("Erro: Digite apenas números!")
+
+    # ─────────── escolha de mídia ───────────
+    while True:
+        media_input = input(
+            "Selecione o tipo de mídia para download "
+            "(1 - Fotos, 2 - Vídeos, 3 - Ambos, 4 - Post Específico por Data): "
+        )
+        if media_input in {"1", "2", "3", "4"}:
+            media_type = media_input
+            break
+        print("Erro: Opção inválida! Digite apenas 1, 2, 3 ou 4.")
+
+    # ─────────────────────────────────────────────
+    #  op 4 – download de UM post por data
+    # ─────────────────────────────────────────────
+    if media_type == "4":
+        if len(selected_profiles) != 1:
+            print("A opção 4 requer escolher apenas um profile.")
+            return
+
+        profile_name = selected_profiles[0]
+        print(f"\nBuscando lista de posts de {profile_name}…")
+        posts = scraper.fetch_all_posts(profile_name)
+        if not posts:
+            print("Nenhum post encontrado.")
+            return
+
+        # ordena do mais recente para o mais antigo
+        posts.sort(
+            key=lambda p: time.strptime(
+                p.get("postDate", "01/01/1970 00:00:00"), "%d/%m/%Y %H:%M:%S"
+            ),
+            reverse=True,
+        )
+        for i, p in enumerate(posts, 1):
+            print(f"{i:3d} – {p['postDate']} • {len(p['files'])} arquivo(s)")
+
+        while True:
+            try:
+                choice = int(input("\nDigite o número do post desejado: "))
+                if 1 <= choice <= len(posts):
+                    chosen = posts[choice - 1]
+                    break
+                print("Número fora da faixa!")
+            except ValueError:
+                print("Digite apenas números.")
+
+        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
+        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
+
+        dl = MediaDownloader(scraper.cffi_session, scraper)
+        total_files = sum(1 for f in chosen["files"] if not f["isLocked"])
+
+        with tqdm(total=total_files, desc="Baixando post") as bar:
+            for f in chosen["files"]:
+                if f["isLocked"]:
+                    continue
+
+                if f["type"] == "image":
+                    out = f"./{profile_name}/fotos/{f['mediaId']}.jpg"
+                    dl.download_file(f["url"], out, bar)
+
+                elif f["type"] == "video":
+                    url = f["url"]
+                    if url.endswith(".key"):
+                        url = key_to_m3u8(url)
+
+                    if ".mp4" in url:
+                        out = f"./{profile_name}/videos/{f['mediaId']}.mp4"
+                        dl.download_file(url, out, bar, is_video=True)
+                    else:
+                        dl.handle_hls(url, f["mediaId"], f"./{profile_name}/videos", bar)
+
+        print("\nDownload do post concluído!")
+        return
+
+    # ─────────────────────────────────────────────
+    #  opções 1-3 – varre TODO o mosaico
+    # ─────────────────────────────────────────────
+    dl = MediaDownloader(scraper.cffi_session, scraper)
+
+    for profile_name in selected_profiles:
+        print(f"\nProcessando perfil: {profile_name}")
+        total, total_photos, total_videos = scraper.get_total_media_count(profile_name)
+        print(f"Total: {total} (Fotos: {total_photos}, Vídeos: {total_videos})")
+
+        if media_type == "1":
+            grand_total = total_photos
+        elif media_type == "2":
+            grand_total = total_videos
+        else:
+            grand_total = total_photos + total_videos
+
+        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
+        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
+
+        skip = 0
+        with tqdm(total=grand_total, desc="Progresso total") as bar:
+            while True:
+                ts = int(time.time() * 1000)
+                url = (
+                    "https://privacy.com.br/Profile?handler=PartialPosts"
+                    f"&skip={skip}&take=10&nomePerfil={profile_name}"
+                    f"&filter=mosaico&_={ts}"
+                )
+                r = scraper.cffi_session.get(url, impersonate="chrome120")
+                if r.status_code != 200:
+                    print(f"Falha ao obter mosaico: {r.status_code}")
+                    break
+
+                items = r.json().get("mosaicItems", [])
+                if not items:
+                    break
+
+                for item in items:
+                    for f in item.get("files", []):
+                        if f["isLocked"]:
+                            continue
+
+                        if f["type"] == "image" and media_type in {"1", "3"}:
+                            out = f"./{profile_name}/fotos/{f['mediaId']}.jpg"
+                            dl.download_file(f["url"], out, bar)
+
+                        elif f["type"] == "video" and media_type in {"2", "3"}:
+                            url = f["url"]
+                            if url.endswith(".key"):         # ⇢ ajuste ❷
+                                url = key_to_m3u8(url)       # ⇢ ajuste ❷
+
+                            if ".mp4" in url:
+                                out = f"./{profile_name}/videos/{f['mediaId']}.mp4"
+                                dl.download_file(url, out, bar, is_video=True)
+                            else:
+                                dl.handle_hls(
+                                    url,
+                                    f["mediaId"],
+                                    f"./{profile_name}/videos",
+                                    bar,
+                                )
+                skip += 10
+
+        print("Download concluído para", profile_name)
 
 if __name__ == "__main__":
     main()
