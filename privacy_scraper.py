@@ -93,34 +93,29 @@ class PrivacyScraper:
         response = self.cffi_session.get(url, impersonate="chrome120")
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            filters = soup.find_all('a', {'data-filter': True})
             
-            counts = {
-                'total': 0,
-                'photos': 0,
-                'videos': 0,
-                'paid': 0
-            }
+            tabs_div = soup.find('div', {'id': 'profile-tabs'})
             
-            for filt in filters:
-                text = filt.get_text(strip=True)
-                match = re.search(r'([\d,]+)\s*', text)
-                if match:
-                    count = int(match.group(1).replace(',', '').replace('.', ''))
-                else:
-                    count = 0
-                    
-                filter_type = filt['data-filter']
-                if filter_type == 'mosaico':
-                    counts['total'] = count
-                elif filter_type == 'fotos':
-                    counts['photos'] = count
-                elif filter_type == 'videos':
-                    counts['videos'] = count
-                elif filter_type == 'pagos':
-                    counts['paid'] = count
-
-            return counts['total'], counts['photos'], counts['videos']
+            total_posts = 0
+            total_media = 0
+            
+            if tabs_div:
+                posts_tab = tabs_div.find('div', {'data-view': 'posts'})
+                if posts_tab:
+                    posts_text = posts_tab.get_text(strip=True)
+                    posts_match = re.search(r'(\d+)\s+Postagens', posts_text)
+                    if posts_match:
+                        total_posts = int(posts_match.group(1))
+                
+                media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
+                if media_tab:
+                    media_text = media_text = media_tab.get_text(strip=True)
+                    media_match = re.search(r'(\d+)\s+Mídias', media_text)
+                    if media_match:
+                        total_media = int(media_match.group(1))
+            
+            return total_media, 0, 0
+        
         return 0, 0, 0
     
     def get_video_token(self, file_id):
@@ -349,8 +344,8 @@ def main():
             for selected_profile_name in selected_profiles:
                 print(f"Processando perfil: {selected_profile_name}")
 
-                total, total_photos, total_videos = privacy_scraper.get_total_media_count(selected_profile_name)
-                print(f"Total de mídias: {total} (Fotos: {total_photos}, Vídeos: {total_videos})")
+                total_media, _, _ = privacy_scraper.get_total_media_count(selected_profile_name)
+                print(f"Total de mídias: {total_media}")
 
                 os.makedirs(f"./{selected_profile_name}/fotos", exist_ok=True)
                 os.makedirs(f"./{selected_profile_name}/videos", exist_ok=True)
@@ -358,7 +353,7 @@ def main():
                 skip = 0
                 downloaded_photos = 0
                 downloaded_videos = 0
-                with tqdm(total=total_photos + total_videos, desc="Progresso total") as pbar:
+                with tqdm(total=total_media, desc="Progresso total") as pbar:
                     while True:
                         unix_timestamp = int(time.time() * 1000)
                         third_url = f"https://privacy.com.br/Profile?handler=PartialPosts&skip={skip}&take=10&nomePerfil={selected_profile_name}&filter=mosaico&_={unix_timestamp}"
@@ -412,7 +407,7 @@ def main():
                             print(f"Falha ao buscar mosaico: {response.status_code}")
 
                         skip += 10
-                        if skip >= total:
+                        if skip >= total_media:
                             break
 
                 print(f"Download concluído para {selected_profile_name}. Fotos: {downloaded_photos}, Vídeos: {downloaded_videos}")
