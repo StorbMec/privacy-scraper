@@ -91,20 +91,25 @@ class PrivacyScraper:
             tabs_div = soup.find('div', {'id': 'profile-tabs'})
             total_posts = 0
             total_media = 0
+            
             if tabs_div:
                 posts_tab = tabs_div.find('div', {'data-view': 'posts'})
                 if posts_tab:
                     posts_text = posts_tab.get_text(strip=True)
-                    posts_match = re.search(r'(\d+)\s+Postagens', posts_text)
+                    posts_match = re.search(r'(\d+)\s+(?:Posts|Postagens)', posts_text)
                     if posts_match:
                         total_posts = int(posts_match.group(1))
+                
                 media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
                 if media_tab:
                     media_text = media_tab.get_text(strip=True)
-                    media_match = re.search(r'(\d+)\s+Mídias', media_text)
+                    media_match = re.search(r'(\d+)\s+(?:Media|Mídias)', media_text)
                     if media_match:
                         total_media = int(media_match.group(1))
-            return total_media, 0, 0
+            
+            return total_media, total_posts, 0
+    
+        print(f"Falha ao acessar perfil: {response.status_code}")
         return 0, 0, 0
 
     def get_purchased_media(self, offset=0, limit=20):
