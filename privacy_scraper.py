@@ -11,15 +11,73 @@ from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from curl_cffi import requests as cffi_requests
+import requests
 
 if not shutil.which("ffmpeg"):
-    raise Exception("FFmpeg não encontrado. Instale e adicione ao PATH: https://ffmpeg.org/download.html")
+    print("FFmpeg não encontrado. Instale e adicione ao PATH: https://ffmpeg.org/download.html")
+    exit(1)
 
 if not os.path.isfile('.env'):
     print("Erro: Arquivo .env não encontrado!")
     exit(1)
 
 load_dotenv()
+
+class TurnstileSolver:
+    def __init__(self):
+        self.api_key = os.getenv('CAPMONSTER_API_KEY')
+        if not self.api_key:
+           print("CAPMONSTER_API_KEY não encontrado no arquivo .env!")
+           exit(1)
+        self.api_url = "https://api.capmonster.cloud"
+    
+    def solve_turnstile(self, page_url="https://privacy.com.br/auth"):
+        task_data = {
+            "clientKey": self.api_key,
+            "task": {
+                "type": "TurnstileTask",
+                "websiteURL": page_url,
+                "websiteKey": "0x4AAAAAACDFv8IsPDbdsS-x"
+            }
+        }
+        
+        create_response = requests.post(f"{self.api_url}/createTask", json=task_data)
+        if create_response.status_code != 200:
+            raise Exception(f"Erro ao criar tarefa: {create_response.text}")
+        
+        task_result = create_response.json()
+        if task_result.get("errorId") != 0:
+            raise Exception(f"Erro na API: {task_result.get('errorDescription')}")
+        
+        task_id = task_result.get("taskId")
+        
+        print("Resolvendo captcha...", end="", flush=True)
+        for _ in range(60):
+            time.sleep(2)
+            print(".", end="", flush=True)
+            
+            result_data = {
+                "clientKey": self.api_key,
+                "taskId": task_id
+            }
+            
+            result_response = requests.post(f"{self.api_url}/getTaskResult", json=result_data)
+            if result_response.status_code != 200:
+                continue
+            
+            result = result_response.json()
+            if result.get("errorId") != 0:
+                raise Exception(f"Erro ao obter resultado: {result.get('errorDescription')}")
+            
+            status = result.get("status")
+            if status == "ready":
+                print("\nCaptcha resolvido!")
+                solution = result.get("solution", {})
+                return solution.get("token")
+            elif status == "processing":
+                continue
+        
+        raise Exception("Tempo esgotado ao aguardar resolução do captcha")
 
 class PrivacyScraper:
     def __init__(self):
@@ -28,16 +86,27 @@ class PrivacyScraper:
         self.password = os.getenv('PASSWORD')
         self.token_v1 = None
         self.token_v2 = None
-
+        self.turnstile_solver = TurnstileSolver()
+    
     def login(self):
         login_url = "https://service.privacy.com.br/auth/login"
+        
+        try:
+            turnstile_token = self.turnstile_solver.solve_turnstile()
+        except Exception as e:
+            print(f"Erro ao resolver captcha: {e}")
+            return False
+        
         login_data = {
             "Email": self.email,
             "Document": None,
             "Password": self.password,
             "Locale": "pt-BR",
-            "CanReceiveEmail": True
+            "CanReceiveEmail": True,
+            "TurnstileToken": turnstile_token,
+            "TurnstileMode": "invisible"
         }
+        
         headers = {
             'Host': 'service.privacy.com.br',
             'Accept': 'application/json, text/plain, */*',
@@ -47,22 +116,26 @@ class PrivacyScraper:
             'Origin': 'https://privacy.com.br',
             'Referer': 'https://privacy.com.br/',
         }
+        
         response = self.cffi_session.post(
             login_url,
             json=login_data,
             headers=headers,
             impersonate="chrome120"
         )
+        
         if response.status_code == 200:
             tokens = response.json()
             self.token_v1 = tokens.get("tokenV1")
             self.token_v2 = tokens.get("token")
+            
             headers_second = {
                 "Host": "privacy.com.br",
                 "Referer": "https://privacy.com.br/auth?route=sign-in",
             }
             second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
             response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
+            
             if response.status_code == 200:
                 return True
         return False
