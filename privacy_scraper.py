@@ -88,7 +88,51 @@ class PrivacyScraper:
         self.token_v2 = None
         self.turnstile_solver = TurnstileSolver()
     
-    def login(self):
+    def login_manual(self, auth_json):
+        """Login manual usando JSON de autenticação"""
+        try:
+            if isinstance(auth_json, str):
+                auth_data = json.loads(auth_json)
+            else:
+                auth_data = auth_json
+            
+            self.token_v1 = auth_data.get("tokenV1")
+            self.token_v2 = auth_data.get("token")
+            
+            if not self.token_v1 or not self.token_v2:
+                print("Erro: JSON de autenticação não contém tokenV1 e/ou token!")
+                return False
+            
+            # Validar tokens fazendo uma requisição simples
+            headers = {
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            }
+            
+            # Testar o token fazendo uma requisição para obter o perfil
+            test_url = "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=1&nickName="
+            response = self.cffi_session.get(test_url, headers=headers, impersonate="chrome120")
+            
+            if response.status_code == 200:
+                print("Tokens validados com sucesso!")
+                return True
+            else:
+                print(f"Erro ao validar tokens: Status {response.status_code}")
+                return False
+                
+        except json.JSONDecodeError:
+            print("Erro: JSON inválido!")
+            return False
+        except Exception as e:
+            print(f"Erro no login manual: {e}")
+            return False
+    
+    def login_auto(self):
+        """Login automático com captcha"""
         login_url = "https://service.privacy.com.br/auth/login"
         
         try:
@@ -139,6 +183,17 @@ class PrivacyScraper:
             if response.status_code == 200:
                 return True
         return False
+
+    def login(self, method="auto", auth_json=None):
+        """Método principal de login com opções"""
+        if method == "manual":
+            if auth_json:
+                return self.login_manual(auth_json)
+            else:
+                print("Erro: Para login manual, forneça o JSON de autenticação.")
+                return False
+        else:
+            return self.login_auto()
 
     def get_profiles(self):
         headers_profile = {
@@ -655,9 +710,80 @@ def select_media_type():
             return media_input
         print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
 
+def get_auth_json_from_user():
+    """Obtém o JSON de autenticação do usuário"""
+    print("\n=== INSTRUÇÕES PARA LOGIN MANUAL ===")
+    print("1. Abra o navegador e vá para: https://privacy.com.br/auth?route=sign-in")
+    print("2. Faça login normalmente (resolva o captcha manualmente)")
+    print("3. Abra o DevTools (F12) e vá para a aba Network")
+    print("4. Filtre por XHR/Fetch requests")
+    print("5. Procure pela request 'login' (https://service.privacy.com.br/auth/login)")
+    print("6. Na aba Response, copie todo o conteúdo JSON")
+    print("\nCole o JSON completo abaixo:")
+    
+    try:
+        print("(Cole tudo e pressione Enter):")
+        auth_json = input()
+        
+        if auth_json.count('\n') == 0 and '{' in auth_json and '}' in auth_json:
+            pass
+        else:
+            more_lines = []
+            while True:
+                try:
+                    line = input()
+                    if line.strip() == '':
+                        break
+                    more_lines.append(line)
+                except EOFError:
+                    break
+            
+            if more_lines:
+                auth_json = auth_json + '\n' + '\n'.join(more_lines)
+                
+    except KeyboardInterrupt:
+        print("\nOperação cancelada pelo usuário.")
+        return None
+    
+    if not auth_json.strip():
+        print("Erro: Nenhum JSON foi fornecido!")
+        return None
+    
+    try:
+        # Validar se é um JSON válido
+        json.loads(auth_json)
+        return auth_json
+    except json.JSONDecodeError:
+        print("Erro: O texto fornecido não é um JSON válido!")
+        return None
+
 def main():
+    print("=== PRIVACY SCRAPER ===")
+    print("Selecione o método de login:")
+    print("1 - Login automático (com captcha via CapMonster)")
+    print("2 - Login manual (inserir JSON de autenticação)")
+    
+    while True:
+        login_method = input("\nEscolha a opção (1 ou 2): ")
+        if login_method in ['1', '2']:
+            break
+        print("Erro: Digite 1 ou 2!")
+    
     privacy_scraper = PrivacyScraper()
-    if privacy_scraper.login():
+    login_success = False
+    
+    if login_method == '1':
+        # Login automático
+        print("\nTentando login automático...")
+        login_success = privacy_scraper.login(method="auto")
+    else:
+        # Login manual
+        print("\n=== MODO LOGIN MANUAL ===")
+        auth_json = get_auth_json_from_user()
+        if auth_json:
+            login_success = privacy_scraper.login(method="manual", auth_json=auth_json)
+    
+    if login_success:
         print("Login realizado com sucesso!")
         profiles = privacy_scraper.get_profiles()
         if not profiles:
