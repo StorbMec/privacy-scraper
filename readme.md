@@ -2,6 +2,17 @@
 
 Apenas baixa conteúdo de perfis no qual você ja é assinante
 
+## Atenção
+Apartir do dia 05/01/2026 o login do Privacy começou a exigir captcha:
+
+1. Acesse https://capmonster.cloud/
+
+2. Crie uma conta
+
+3. Adicione saldo à sua conta (o serviço é pago por captcha resolvido)
+
+5. Copie sua chave de API e adicione ao arquivo .env
+
 ## Como utilizar:
 
 1. Instale os requerimentos utilizando o comando
@@ -14,6 +25,7 @@ pip install -r requirements.txt
 ```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
+CAPMONSTER_API_KEY=sua_chave_capmonster_aqui
 ```
 
 3. Após tudo configurado, apenas faça
