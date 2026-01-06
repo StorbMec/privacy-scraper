@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
-CAPMONSTER_API_KEY=sua_chave_capmonster_aqui
+CAPMONSTER_API_KEY=sua_chave_capmonster_aqui #OPCIONAL apenas se for login automatico
 ```
 
 3. Após tudo configurado, apenas faça
