@@ -26,12 +26,15 @@ load_dotenv()
 class TurnstileSolver:
     def __init__(self):
         self.api_key = os.getenv('CAPMONSTER_API_KEY')
-        if not self.api_key:
-           print("CAPMONSTER_API_KEY não encontrado no arquivo .env!")
-           exit(1)
         self.api_url = "https://api.capmonster.cloud"
     
+    def is_available(self):
+        return bool(self.api_key)
+    
     def solve_turnstile(self, page_url="https://privacy.com.br/auth"):
+        if not self.api_key:
+            raise Exception("Chave CAPMONSTER_API_KEY não configurada no arquivo .env!")
+        
         task_data = {
             "clientKey": self.api_key,
             "task": {
@@ -89,7 +92,6 @@ class PrivacyScraper:
         self.turnstile_solver = TurnstileSolver()
     
     def login_manual(self, auth_json):
-        """Login manual usando JSON de autenticação"""
         try:
             if isinstance(auth_json, str):
                 auth_data = json.loads(auth_json)
@@ -103,7 +105,6 @@ class PrivacyScraper:
                 print("Erro: JSON de autenticação não contém tokenV1 e/ou token!")
                 return False
             
-            # Validar tokens fazendo uma requisição simples
             headers = {
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
@@ -113,7 +114,6 @@ class PrivacyScraper:
                 "Referer": "https://privacy.com.br/",
             }
             
-            # Testar o token fazendo uma requisição para obter o perfil
             test_url = "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=1&nickName="
             response = self.cffi_session.get(test_url, headers=headers, impersonate="chrome120")
             
@@ -132,7 +132,10 @@ class PrivacyScraper:
             return False
     
     def login_auto(self):
-        """Login automático com captcha"""
+        if not self.turnstile_solver.is_available():
+            print("Erro: Para login automático, configure CAPMONSTER_API_KEY no arquivo .env")
+            return False
+            
         login_url = "https://service.privacy.com.br/auth/login"
         
         try:
@@ -185,7 +188,6 @@ class PrivacyScraper:
         return False
 
     def login(self, method="auto", auth_json=None):
-        """Método principal de login com opções"""
         if method == "manual":
             if auth_json:
                 return self.login_manual(auth_json)
@@ -196,6 +198,10 @@ class PrivacyScraper:
             return self.login_auto()
 
     def get_profiles(self):
+        if not self.token_v2:
+            print("Erro: Não autenticado!")
+            return []
+            
         headers_profile = {
             "authorization": f"Bearer {self.token_v2}",
         }
@@ -234,6 +240,10 @@ class PrivacyScraper:
         return 0, 0, 0
 
     def get_purchased_media(self, offset=0, limit=20):
+        if not self.token_v2:
+            print("Erro: Não autenticado!")
+            return None
+            
         url = f"https://service.privacy.com.br/timelinequeries/post/paid/{offset}/{limit}"
         headers = {
             "authorization": f"Bearer {self.token_v2}",
@@ -249,6 +259,10 @@ class PrivacyScraper:
         return None
 
     def get_chat_media(self, offset=0, limit=20):
+        if not self.token_v2:
+            print("Erro: Não autenticado!")
+            return None
+            
         url = f"https://service.privacy.com.br/timelinequeries/chat/purchases/{offset}/{limit}"
         headers = {
             "authorization": f"Bearer {self.token_v2}",
@@ -264,6 +278,10 @@ class PrivacyScraper:
         return None
 
     def get_video_token(self, file_id):
+        if not self.token_v2:
+            print("Erro: Não autenticado!")
+            return None
+            
         token_url = "https://service.privacy.com.br/media/video/token"
         data = {
             "file_id": file_id,
@@ -711,7 +729,6 @@ def select_media_type():
         print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
 
 def get_auth_json_from_user():
-    """Obtém o JSON de autenticação do usuário"""
     print("\n=== INSTRUÇÕES PARA LOGIN MANUAL ===")
     print("1. Abra o navegador e vá para: https://privacy.com.br/auth?route=sign-in")
     print("2. Faça login normalmente (resolva o captcha manualmente)")
@@ -750,7 +767,6 @@ def get_auth_json_from_user():
         return None
     
     try:
-        # Validar se é um JSON válido
         json.loads(auth_json)
         return auth_json
     except json.JSONDecodeError:
@@ -773,11 +789,9 @@ def main():
     login_success = False
     
     if login_method == '1':
-        # Login automático
         print("\nTentando login automático...")
         login_success = privacy_scraper.login(method="auto")
     else:
-        # Login manual
         print("\n=== MODO LOGIN MANUAL ===")
         auth_json = get_auth_json_from_user()
         if auth_json:
