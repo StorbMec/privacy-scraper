@@ -3,15 +3,23 @@
 Apenas baixa conteúdo de perfis no qual você ja é assinante
 
 ## Atenção
-Apartir do dia 05/01/2026 o login do Privacy começou a exigir captcha:
+Apartir do dia 05/01/2026 o login do Privacy começou a exigir captcha então voce tem duas opções:
 
+## Opção 1 (login automatico)
 1. Acesse https://capmonster.cloud/
-
 2. Crie uma conta
-
 3. Adicione saldo à sua conta (o serviço é pago por captcha resolvido)
-
 5. Copie sua chave de API e adicione ao arquivo .env
+<img src="https://i.imgur.com/ZdduW64.png">
+
+## Opção 2 (login manual)
+1. Va para: https://privacy.com.br/auth?route=sign-in
+2. Pressione F12 -> Aba Network
+3. Faca login normalmente
+4. Procure a requisicao "login"
+5. Na aba Response, copie TODO o JSON
+6. Cole no programa quando pedir
+<img src="https://i.imgur.com/atNzJAT.png">
 
 ## Como utilizar:
 
@@ -25,7 +33,7 @@ pip install -r requirements.txt
 ```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
-CAPMONSTER_API_KEY=sua_chave_capmonster_aqui
+CAPMONSTER_API_KEY=sua_chave_capmonster_aqui #OPCIONAL apenas se for login automatico
 ```
 
 3. Após tudo configurado, apenas faça
@@ -37,7 +45,7 @@ python privacy_scraper.py
 
 5. Depois selecione o tipo de midia, aperte o numero de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos).
 
-## FFMPeg
+## Dependecias (FFMPeg)
 (https://github.com/BtbN/FFmpeg-Builds/releases)
 
 1. Extraia o arquivo ZIP em uma pasta (ex: C:\ffmpeg\bin)
