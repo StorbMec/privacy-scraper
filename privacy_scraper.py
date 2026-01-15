@@ -44,7 +44,7 @@ class TurnstileSolver:
             }
         }
         
-        create_response = requests.post(f"{self.api_url}/createTask", json=task_data)
+        create_response = requests.post(f"{self.api_url}/createTask", json=task_data, verify=False)
         if create_response.status_code != 200:
             raise Exception(f"Erro ao criar tarefa: {create_response.text}")
         
@@ -64,7 +64,7 @@ class TurnstileSolver:
                 "taskId": task_id
             }
             
-            result_response = requests.post(f"{self.api_url}/getTaskResult", json=result_data)
+            result_response = requests.post(f"{self.api_url}/getTaskResult", json=result_data, verify=False)
             if result_response.status_code != 200:
                 continue
             
@@ -83,13 +83,19 @@ class TurnstileSolver:
         raise Exception("Tempo esgotado ao aguardar resolução do captcha")
 
 class PrivacyScraper:
-    def __init__(self):
+    def __init__(self, debug_mode=False):
         self.cffi_session = cffi_requests.Session()
         self.email = os.getenv('EMAIL')
         self.password = os.getenv('PASSWORD')
         self.token_v1 = None
         self.token_v2 = None
         self.turnstile_solver = TurnstileSolver()
+        if debug_mode:
+            self.cffi_session.proxies = {
+                'http': 'http://localhost:8888',
+                'https': 'http://localhost:8888'
+            }
+            self.cffi_session.verify = False
     
     def login_manual(self, auth_json):
         try:
@@ -105,23 +111,20 @@ class PrivacyScraper:
                 print("Erro: JSON de autenticação não contém tokenV1 e/ou token!")
                 return False
             
-            headers = {
-                "authorization": f"Bearer {self.token_v2}",
-                "Host": "service.privacy.com.br",
-                "Accept": "application/json, text/plain, */*",
+            headers_second = {
+                "Host": "privacy.com.br",
+                "Referer": "https://privacy.com.br/auth?route=sign-in",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                "Origin": "https://privacy.com.br",
-                "Referer": "https://privacy.com.br/",
             }
             
-            test_url = "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=1&nickName="
-            response = self.cffi_session.get(test_url, headers=headers, impersonate="chrome120")
+            second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
+            response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
             
             if response.status_code == 200:
-                print("Tokens validados com sucesso!")
+                print("Login manual realizado com sucesso!")
                 return True
             else:
-                print(f"Erro ao validar tokens: Status {response.status_code}")
+                print(f"Erro ao obter cookies de sessão: Status {response.status_code}")
                 return False
                 
         except json.JSONDecodeError:
@@ -182,7 +185,7 @@ class PrivacyScraper:
             }
             second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
             response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
-            
+            print("Cookies: " + response.headers.get("Set-Cookie"))
             if response.status_code == 200:
                 return True
         return False
@@ -214,29 +217,25 @@ class PrivacyScraper:
 
     def get_total_media_count(self, profile_name):
         url = f"https://privacy.com.br/profile/{profile_name}"
-        response = self.cffi_session.get(url, impersonate="chrome120")
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            tabs_div = soup.find('div', {'id': 'profile-tabs'})
-            total_posts = 0
-            total_media = 0
-            
-            if tabs_div:
-                posts_tab = tabs_div.find('div', {'data-view': 'posts'})
-                if posts_tab:
-                    posts_text = posts_tab.get_text(strip=True)
-                    posts_match = re.search(r'(\d+)\s+(?:Posts|Postagens)', posts_text)
-                    if posts_match:
-                        total_posts = int(posts_match.group(1))
+        try:
+            response = self.cffi_session.get(url, impersonate="chrome120")
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
-                if media_tab:
-                    media_text = media_tab.get_text(strip=True)
-                    media_match = re.search(r'(\d+)\s+(?:Media|Mídias)', media_text)
-                    if media_match:
-                        total_media = int(media_match.group(1))
-            
-            return total_media, total_posts, 0
+                user_info = soup.find('privacy-web-user-info')
+                if user_info and 'user' in user_info.attrs:
+                    user_json = user_info['user'].replace('&quot;', '"')
+                    user_data = json.loads(user_json)
+                    stats = user_data.get('stats', {})
+                    
+                    total_media = stats.get('images', 0) + stats.get('videos', 0) + stats.get('gifs', 0)
+                    total_posts = stats.get('posts', 0)
+                    
+                    return total_media, total_posts, 0
+                    
+        except Exception as e:
+            print(f"Erro ao obter contagem de mídias: {e}")
+        
         return 0, 0, 0
 
     def get_purchased_media(self, offset=0, limit=20):
