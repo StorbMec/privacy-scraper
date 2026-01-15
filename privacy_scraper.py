@@ -217,26 +217,29 @@ class PrivacyScraper:
 
     def get_total_media_count(self, profile_name):
         url = f"https://privacy.com.br/profile/{profile_name}"
-        try:
-            response = self.cffi_session.get(url, impersonate="chrome120")
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                user_info = soup.find('privacy-web-user-info')
-                if user_info and 'user' in user_info.attrs:
-                    user_json = user_info['user'].replace('&quot;', '"')
-                    user_data = json.loads(user_json)
-                    stats = user_data.get('stats', {})
-                    
-                    total_media = stats.get('images', 0) + stats.get('videos', 0) + stats.get('gifs', 0)
-                    total_posts = stats.get('posts', 0)
-                    
-                    return total_media, total_posts, 0
-                    
-        except Exception as e:
-            print(f"Erro ao obter contagem de mídias: {e}")
-        
-        return 0, 0, 0
+        response = self.cffi_session.get(url, impersonate="chrome120")
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tabs_div = soup.find('div', {'id': 'profile-tabs'})
+            total_posts = 0
+            total_media = 0
+            
+            if tabs_div:
+                posts_tab = tabs_div.find('div', {'data-view': 'posts'})
+                if posts_tab:
+                    posts_text = posts_tab.get_text(strip=True)
+                    posts_match = re.search(r'(\d+)\s+(?:Posts|Postagens)', posts_text)
+                    if posts_match:
+                        total_posts = int(posts_match.group(1))
+
+                media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
+                if media_tab:
+                    media_text = media_tab.get_text(strip=True)
+                    media_match = re.search(r'(\d+)\s+(?:Media|Mídias)', media_text)
+                    if media_match:
+                        total_media = int(media_match.group(1))
+            
+            return total_media, total_posts, 0
 
     def get_purchased_media(self, offset=0, limit=20):
         if not self.token_v2:
