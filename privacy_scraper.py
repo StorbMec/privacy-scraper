@@ -83,14 +83,24 @@ class TurnstileSolver:
         raise Exception("Tempo esgotado ao aguardar resolução do captcha")
 
 class PrivacyScraper:
-    def __init__(self, debug_mode=False):
+    def __init__(self):
         self.cffi_session = cffi_requests.Session()
         self.email = os.getenv('EMAIL')
         self.password = os.getenv('PASSWORD')
         self.token_v1 = None
         self.token_v2 = None
-        self.turnstile_solver = TurnstileSolver()
-        if debug_mode:
+        
+        enable_captcha_env = os.getenv('ENABLE_CAPTCHA', 'false').lower()
+        debug_mode_env = os.getenv('DEBUG_MODE', 'false').lower()
+        
+        self.enable_captcha = enable_captcha_env in ['true', '1', 'yes']
+        
+        if self.enable_captcha:
+            self.turnstile_solver = TurnstileSolver()
+        else:
+            self.turnstile_solver = None
+        
+        if debug_mode_env in ['true', '1', 'yes']:
             self.cffi_session.proxies = {
                 'http': 'http://localhost:8888',
                 'https': 'http://localhost:8888'
@@ -135,27 +145,36 @@ class PrivacyScraper:
             return False
     
     def login_auto(self):
-        if not self.turnstile_solver.is_available():
-            print("Erro: Para login automático, configure CAPMONSTER_API_KEY no arquivo .env")
-            return False
-            
         login_url = "https://service.privacy.com.br/auth/login"
         
-        try:
-            turnstile_token = self.turnstile_solver.solve_turnstile()
-        except Exception as e:
-            print(f"Erro ao resolver captcha: {e}")
-            return False
+        if self.enable_captcha:
+            if not self.turnstile_solver or not self.turnstile_solver.is_available():
+                print("Erro: Para login automático com captcha, configure CAPMONSTER_API_KEY no arquivo .env")
+                return False
+            try:
+                turnstile_token = self.turnstile_solver.solve_turnstile()
+            except Exception as e:
+                print(f"Erro ao resolver captcha: {e}")
+                return False
         
-        login_data = {
-            "Email": self.email,
-            "Document": None,
-            "Password": self.password,
-            "Locale": "pt-BR",
-            "CanReceiveEmail": True,
-            "TurnstileToken": turnstile_token,
-            "TurnstileMode": "invisible"
-        }
+        if self.enable_captcha:
+            login_data = {
+                "Email": self.email,
+                "Document": None,
+                "Password": self.password,
+                "Locale": "pt-BR",
+                "CanReceiveEmail": True,
+                "TurnstileToken": turnstile_token,
+                "TurnstileMode": "invisible"
+            }
+        else:
+            login_data = {
+                "Email": self.email,
+                "Document": None,
+                "Password": self.password,
+                "Locale": "pt-BR",
+                "CanReceiveEmail": True,
+            }
         
         headers = {
             'Host': 'service.privacy.com.br',
@@ -185,7 +204,6 @@ class PrivacyScraper:
             }
             second_url = f"https://privacy.com.br/strangler/Authorize?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
             response = self.cffi_session.get(second_url, headers=headers_second, impersonate="chrome120")
-            print("Cookies: " + response.headers.get("Set-Cookie"))
             if response.status_code == 200:
                 return True
         return False
@@ -776,22 +794,24 @@ def get_auth_json_from_user():
         return None
 
 def main():
-    print("=== PRIVACY SCRAPER ===")
-    print("Selecione o método de login:")
-    print("1 - Login automático (com captcha via CapMonster)")
-    print("2 - Login manual (inserir JSON de autenticação)")
-    
-    while True:
-        login_method = input("\nEscolha a opção (1 ou 2): ")
-        if login_method in ['1', '2']:
-            break
-        print("Erro: Digite 1 ou 2!")
-    
     privacy_scraper = PrivacyScraper()
+    
+    if privacy_scraper.enable_captcha:
+        print("\nSelecione o método de login:")
+        print("1 - Login automático com captcha")
+        print("2 - Login manual (inserir JSON de autenticação)")
+        
+        while True:
+            login_method = input("\nEscolha a opção (1 ou 2): ")
+            if login_method in ['1', '2']:
+                break
+            print("Erro: Digite 1 ou 2!")
+    else:
+        login_method = "1"
+    
     login_success = False
     
     if login_method == '1':
-        print("\nTentando login automático...")
         login_success = privacy_scraper.login(method="auto")
     else:
         print("\n=== MODO LOGIN MANUAL ===")
