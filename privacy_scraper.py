@@ -192,6 +192,10 @@ class PrivacyScraper:
             headers=headers,
             impersonate="chrome120"
         )
+
+        if "TurnstileToken is required" in response.text:
+            print("Erro: O captcha é obrigatório para este login. Habilite o captcha no arquivo .env")
+            exit(1)
         
         if response.status_code == 200:
             tokens = response.json()
