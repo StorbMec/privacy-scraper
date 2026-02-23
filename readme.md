@@ -1,68 +1,76 @@
 # Privacy Scraper
 
-Apenas baixa conteúdo de perfis no qual você ja é assinante
+Скачивает контент только с профилей, на которые вы уже подписаны.
 
-## Atenção
-Apartir do dia 05/01/2026 o login do Privacy as vezes exigie captcha então basta voce configurar no .env
+## Внимание
+С 05.01.2026 при входе на Privacy иногда требуется капча — настройте её в файле .env.
 
-## Como utilizar:
+## Как использовать:
 
-1. Instale os requerimentos utilizando o comando
+1. Установите зависимости:
 
 ```
 pip install -r requirements.txt
 ```
 
-2. Crie um arquivo na raiz chamado .env com a seguinte arvore:
+2. Создайте файл `.env` в корне проекта:
 ```
-EMAIL=exemplo@gmail.com
-PASSWORD=exemplo123
-CAPMONSTER_API_KEY=sua_chave_capmonster_aqui #OPCIONAL apenas se captcha estiver True
-ENABLE_CAPTCHA = false
-DEBUG_MODE = false
+EMAIL=example@gmail.com
+PASSWORD=example123
+CAPMONSTER_API_KEY=ваш_ключ_capmonster  # НЕОБЯЗАТЕЛЬНО — только если капча включена
+ENABLE_CAPTCHA=false
+DEBUG_MODE=false
+MAX_DOWNLOAD_WORKERS=5  # НЕОБЯЗАТЕЛЬНО — кол-во потоков для параллельной загрузки фото (по умолчанию 5)
 ```
 
-3. Após tudo configurado, apenas faça
+3. Запустите скрипт:
 ```
 python privacy_scraper.py
 ```
 
-4. Quando aparecer a lista de perfis, aperta o numero do perfil escolhido ou 0 para varrer todos os perfis.
+4. Когда появится список профилей, введите номер нужного профиля или 0 для выхода.
 
-5. Depois selecione o tipo de midia, aperte o numero de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos).
+5. Выберите тип медиа: 1 — Фото, 2 — Видео, 3 — Всё.
 
-## Dependecias (FFMPeg)
+## Оптимизация загрузки
+
+Скрипт использует два способа ускорения:
+
+- **Видео (HLS)**: FFmpeg скачивает M3U8-поток напрямую одной командой вместо посегментной загрузки. Это в разы быстрее, т.к. FFmpeg сам обрабатывает плейлист, ключи и сегменты. При неудаче автоматически откатывается на старый метод.
+- **Фото**: параллельная загрузка через пул потоков (настраивается через `MAX_DOWNLOAD_WORKERS` в .env).
+
+## Зависимости (FFmpeg)
 (https://github.com/BtbN/FFmpeg-Builds/releases)
 
-1. Extraia o arquivo ZIP em uma pasta (ex: C:\ffmpeg\bin)
+1. Распакуйте ZIP-архив в папку (например: `C:\ffmpeg\bin`)
 
-2. Adicione o caminho do FFmpeg às variáveis de ambiente do sistema:
+2. Добавьте путь к FFmpeg в переменные окружения системы:
 
-3. Pressione Win + S e digite "variáveis de ambiente"
+3. Нажмите Win + S и введите «переменные среды»
 
-4. Clique em "Editar as variáveis de ambiente do sistema"
+4. Нажмите «Изменить переменные среды системы»
 
-5. Em "Variáveis do sistema", selecione Path > Editar > Novo
+5. В разделе «Системные переменные» выберите Path → Изменить → Создать
 
-6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
+6. Добавьте путь к папке bin FFmpeg (например: `C:\ffmpeg\bin`)
 
-## Instruções se precisar de captcha (ENABLE_CAPTCHA = True)
+## Инструкции для капчи (ENABLE_CAPTCHA=true)
 
-## Opção 1 (login automatico)
-1. Acesse https://capmonster.cloud/
-2. Crie uma conta
-3. Adicione saldo à sua conta (o serviço é pago por captcha resolvido)
-5. Copie sua chave de API e adicione ao arquivo .env
+### Вариант 1 (автоматический вход)
+1. Перейдите на https://capmonster.cloud/
+2. Создайте аккаунт
+3. Пополните баланс (сервис платный, оплата за каждую решённую капчу)
+4. Скопируйте API-ключ и добавьте в файл .env
 <img src="https://i.imgur.com/ZdduW64.png">
 
-## Opção 2 (login manual)
-1. Va para: https://privacy.com.br/auth?route=sign-in
-2. Pressione F12 -> Aba Network
-3. Faca login normalmente
-4. Procure a requisicao "login"
-5. Na aba Response, copie TODO o JSON
-6. Cole no programa quando pedir
+### Вариант 2 (ручной вход)
+1. Перейдите на: https://privacy.com.br/auth?route=sign-in
+2. Нажмите F12 → вкладка Network
+3. Войдите в аккаунт как обычно
+4. Найдите запрос «login»
+5. Во вкладке Response скопируйте ВЕСЬ JSON
+6. Вставьте в программу, когда она попросит
 <img src="https://i.imgur.com/atNzJAT.png">
 
-## Contato
-discord: st8rb 
+## Контакт
+Discord: st8rb
