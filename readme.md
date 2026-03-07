@@ -2,8 +2,9 @@
 
 Apenas baixa conteúdo de perfis no qual você ja é assinante
 
-## Atenção
-Apartir do dia 05/01/2026 o login do Privacy as vezes exigie captcha então basta voce configurar no .env
+## UPDATES
+Apartir do dia 07/03/2026 consegui dar bypass no captcha do privacy
+Também agora é armazenado localmente as tokens que podem ser utilizadas para logar mais rapidamente até que eleas expirem
 
 ## Como utilizar:
 
@@ -17,8 +18,6 @@ pip install -r requirements.txt
 ```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
-CAPMONSTER_API_KEY=sua_chave_capmonster_aqui #OPCIONAL apenas se captcha estiver True
-ENABLE_CAPTCHA = false
 DEBUG_MODE = false
 ```
 
@@ -45,24 +44,6 @@ python privacy_scraper.py
 5. Em "Variáveis do sistema", selecione Path > Editar > Novo
 
 6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
-
-## Instruções se precisar de captcha (ENABLE_CAPTCHA = True)
-
-## Opção 1 (login automatico)
-1. Acesse https://capmonster.cloud/
-2. Crie uma conta
-3. Adicione saldo à sua conta (o serviço é pago por captcha resolvido)
-5. Copie sua chave de API e adicione ao arquivo .env
-<img src="https://i.imgur.com/ZdduW64.png">
-
-## Opção 2 (login manual)
-1. Va para: https://privacy.com.br/auth?route=sign-in
-2. Pressione F12 -> Aba Network
-3. Faca login normalmente
-4. Procure a requisicao "login"
-5. Na aba Response, copie TODO o JSON
-6. Cole no programa quando pedir
-<img src="https://i.imgur.com/atNzJAT.png">
 
 ## Contato
 discord: st8rb 
