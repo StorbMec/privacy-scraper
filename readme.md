@@ -2,8 +2,9 @@
 
 Apenas baixa conteúdo de perfis no qual você ja é assinante
 
-## Atenção
+## UPDATES
 Apartir do dia 07/03/2026 consegui dar bypass no captcha do privacy
+Também agora é armazenado localmente as tokens que podem ser utilizadas para logar mais rapidamente até que eleas expirem
 
 ## Como utilizar:
 
