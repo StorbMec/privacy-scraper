@@ -33,8 +33,7 @@ if not os.path.isfile('.env'):
 
 load_dotenv()
 
-# ── Turnstile ──────────────────────────────────────────────────────────────────
-
+TOKEN_CACHE_FILE  = "token_cache.json"
 TURNSTILE_URL     = "https://privacy.com.br"
 TURNSTILE_SITEKEY = "0x4AAAAAACDFv8IsPDbdsS-x"
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -59,17 +58,17 @@ def get_browser():
         _camoufox_browser  = _camoufox_instance.start()
     return _camoufox_browser
 
-def resolve_turnstile() -> str | None:
+def resolve_turnstile():
     turnstile_div = (
         f'<div class="cf-turnstile" data-sitekey="{TURNSTILE_SITEKEY}" '
         f'data-action="login"></div>'
     )
-    page_html = HTML_TEMPLATE.replace("<!-- cf turnstile -->", turnstile_div)
+    page_html      = HTML_TEMPLATE.replace("<!-- cf turnstile -->", turnstile_div)
     url_with_slash = TURNSTILE_URL + "/"
 
     try:
         browser = get_browser()
-        page = browser.new_page()
+        page    = browser.new_page()
         try:
             page.route(url_with_slash, lambda route: route.fulfill(body=page_html, status=200))
             page.goto(url_with_slash)
@@ -101,7 +100,6 @@ def resolve_turnstile() -> str | None:
         _camoufox_instance = None
         return None
 
-# ── Scraper ────────────────────────────────────────────────────────────────────
 
 class PrivacyScraper:
     def __init__(self):
@@ -111,15 +109,68 @@ class PrivacyScraper:
         self.token_v1 = None
         self.token_v2 = None
 
-        debug_mode_env = os.getenv('DEBUG_MODE', 'false').lower()
-        if debug_mode_env in ['true', '1', 'yes']:
+        if os.getenv('DEBUG_MODE', 'false').lower() in ['true', '1', 'yes']:
             self.cffi_session.proxies = {
                 'http':  'http://localhost:8888',
                 'https': 'http://localhost:8888'
             }
             self.cffi_session.verify = False
 
+    def _load_token_cache(self):
+        if not os.path.isfile(TOKEN_CACHE_FILE):
+            return None
+        try:
+            with open(TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get("email") != self.email:
+                return None
+            if time.time() >= cache.get("expires_at", 0) - 300:
+                print("Cache de tokens expirado.")
+                return None
+            return cache
+        except Exception:
+            return None
+
+    def _save_token_cache(self, token_v1, token_v2, expires_at):
+        try:
+            with open(TOKEN_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "email":      self.email,
+                    "token_v1":   token_v1,
+                    "token_v2":   token_v2,
+                    "expires_at": expires_at,
+                }, f, indent=2)
+        except Exception as e:
+            print(f"[Cache] Aviso: não foi possível salvar o cache: {e}")
+
+    def _decode_token_expiry(self, token_v2):
+        try:
+            payload_b64 = token_v2.split('.')[1]
+            padding     = '=' * ((4 - len(payload_b64) % 4) % 4)
+            payload     = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+            return payload.get("exp")
+        except Exception:
+            return None
+
+    def _apply_tokens(self, token_v1, token_v2):
+        self.token_v1 = token_v1
+        self.token_v2 = token_v2
+        r = self.cffi_session.get(
+            f"https://privacy.com.br/strangler/Authorize?TokenV1={token_v1}&TokenV2={token_v2}",
+            headers={"Host": "privacy.com.br", "Referer": "https://privacy.com.br/auth?route=sign-in"},
+            impersonate="chrome120"
+        )
+        return r.status_code == 200
+
     def login(self):
+        cache = self._load_token_cache()
+        if cache:
+            print("Tokens encontrados no cache, reutilizando...")
+            if self._apply_tokens(cache["token_v1"], cache["token_v2"]):
+                print("Login via cache realizado com sucesso!")
+                return True
+            print("Cache inválido, fazendo novo login...")
+
         print("Resolvendo captcha...", end="", flush=True)
         turnstile_token = resolve_turnstile()
         if not turnstile_token:
@@ -127,45 +178,36 @@ class PrivacyScraper:
             return False
         print(" OK")
 
-        login_url  = "https://service.privacy.com.br/auth/login"
-        login_data = {
-            "Email":          self.email,
-            "Document":       None,
-            "Password":       self.password,
-            "Locale":         "pt-BR",
-            "CanReceiveEmail": True,
-            "TurnstileToken": turnstile_token,
-            "TurnstileMode":  "invisible"
-        }
-        headers = {
-            'Host':         'service.privacy.com.br',
-            'Accept':       'application/json, text/plain, */*',
-            'Content-Type': 'application/json',
-            'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-            'Sec-GPC':      '1',
-            'Origin':       'https://privacy.com.br',
-            'Referer':      'https://privacy.com.br/',
-        }
-
         response = self.cffi_session.post(
-            login_url, json=login_data, headers=headers, impersonate="chrome120"
+            "https://service.privacy.com.br/auth/login",
+            json={
+                "Email":           self.email,
+                "Document":        None,
+                "Password":        self.password,
+                "Locale":          "pt-BR",
+                "CanReceiveEmail": True,
+                "TurnstileToken":  turnstile_token,
+                "TurnstileMode":   "invisible"
+            },
+            headers={
+                'Host':         'service.privacy.com.br',
+                'Accept':       'application/json, text/plain, */*',
+                'Content-Type': 'application/json',
+                'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                'Sec-GPC':      '1',
+                'Origin':       'https://privacy.com.br',
+                'Referer':      'https://privacy.com.br/',
+            },
+            impersonate="chrome120"
         )
 
         if response.status_code == 200:
-            tokens        = response.json()
-            self.token_v1 = tokens.get("tokenV1")
-            self.token_v2 = tokens.get("token")
-
-            second_url = (
-                f"https://privacy.com.br/strangler/Authorize"
-                f"?TokenV1={self.token_v1}&TokenV2={self.token_v2}"
-            )
-            r2 = self.cffi_session.get(second_url, headers={
-                "Host":    "privacy.com.br",
-                "Referer": "https://privacy.com.br/auth?route=sign-in",
-            }, impersonate="chrome120")
-
-            return r2.status_code == 200
+            tokens = response.json()
+            t1, t2 = tokens.get("tokenV1"), tokens.get("token")
+            if self._apply_tokens(t1, t2):
+                expires_at = self._decode_token_expiry(t2) or (int(time.time()) + 3600)
+                self._save_token_cache(t1, t2, expires_at)
+                return True
 
         try:
             err = response.json().get("message") or response.json().get("error") or response.text
@@ -185,30 +227,25 @@ class PrivacyScraper:
             impersonate="chrome120"
         )
         if response.status_code == 200:
-            profiles = response.json()
             return [
                 {"profileName": p["profileName"], "nickname": p.get("nickname", p["profileName"])}
-                for p in profiles
+                for p in response.json()
             ]
         return []
 
     def get_total_media_count(self, profile_name):
-        url      = f"https://privacy.com.br/profile/{profile_name}"
-        response = self.cffi_session.get(url, impersonate="chrome120")
+        response    = self.cffi_session.get(f"https://privacy.com.br/profile/{profile_name}", impersonate="chrome120")
         total_posts = 0
         total_media = 0
 
         if response.status_code == 200:
-            soup     = BeautifulSoup(response.text, 'html.parser')
-            tabs_div = soup.find('div', {'id': 'profile-tabs'})
-
+            tabs_div = BeautifulSoup(response.text, 'html.parser').find('div', {'id': 'profile-tabs'})
             if tabs_div:
                 posts_tab = tabs_div.find('div', {'data-view': 'posts'})
                 if posts_tab:
                     m = re.search(r'(\d+)\s+(?:Posts|Postagens)', posts_tab.get_text(strip=True))
                     if m:
                         total_posts = int(m.group(1))
-
                 media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
                 if media_tab:
                     m = re.search(r'(\d+)\s+(?:Media|Mídias)', media_tab.get_text(strip=True))
@@ -222,52 +259,52 @@ class PrivacyScraper:
         if not self.token_v2:
             print("Erro: Não autenticado!")
             return None
-
-        url = f"https://service.privacy.com.br/timelinequeries/post/paid/{offset}/{limit}"
-        headers = {
-            "authorization": f"Bearer {self.token_v2}",
-            "Host":          "service.privacy.com.br",
-            "Accept":        "application/json, text/plain, */*",
-            "User-Agent":    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            "Origin":        "https://privacy.com.br",
-            "Referer":       "https://privacy.com.br/",
-        }
-        response = self.cffi_session.get(url, headers=headers, impersonate="chrome120")
+        response = self.cffi_session.get(
+            f"https://service.privacy.com.br/timelinequeries/post/paid/{offset}/{limit}",
+            headers={
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
+            impersonate="chrome120"
+        )
         return response.json() if response.status_code == 200 else None
 
     def get_chat_media(self, offset=0, limit=20):
         if not self.token_v2:
             print("Erro: Não autenticado!")
             return None
-
-        url = f"https://service.privacy.com.br/timelinequeries/chat/purchases/{offset}/{limit}"
-        headers = {
-            "authorization": f"Bearer {self.token_v2}",
-            "Host":          "service.privacy.com.br",
-            "Accept":        "application/json, text/plain, */*",
-            "User-Agent":    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            "Origin":        "https://privacy.com.br",
-            "Referer":       "https://privacy.com.br/",
-        }
-        response = self.cffi_session.get(url, headers=headers, impersonate="chrome120")
+        response = self.cffi_session.get(
+            f"https://service.privacy.com.br/timelinequeries/chat/purchases/{offset}/{limit}",
+            headers={
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
+            impersonate="chrome120"
+        )
         return response.json() if response.status_code == 200 else None
 
     def get_video_token(self, file_id):
         if not self.token_v2:
             print("Erro: Não autenticado!")
             return None
-
-        headers = {
-            "Host":          "service.privacy.com.br",
-            "Authorization": f"Bearer {self.token_v2}",
-            "Content-Type":  "application/json",
-            "Origin":        "https://privacy.com.br",
-            "Referer":       "https://privacy.com.br/",
-        }
         response = self.cffi_session.post(
             "https://service.privacy.com.br/media/video/token",
             json={"file_id": file_id, "exp": 3600},
-            headers=headers,
+            headers={
+                "Host": "service.privacy.com.br",
+                "Authorization": f"Bearer {self.token_v2}",
+                "Content-Type": "application/json",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
             impersonate="chrome120"
         )
         return response.json() if response.status_code == 200 else None
@@ -276,13 +313,11 @@ class PrivacyScraper:
         try:
             if any(v in image_url.lower() for v in ['.mp4', '.m3u8', '/hls/', 'video']):
                 return image_url
-
             match = re.search(r"https:\/\/[^\/]+\/([^\/?]+)", image_url)
             if not match:
                 return image_url
-
-            token   = match.group(1)
-            padding = '=' * ((4 - len(token) % 4) % 4)
+            token      = match.group(1)
+            padding    = '=' * ((4 - len(token) % 4) % 4)
             token_json = json.loads(base64.urlsafe_b64decode(token + padding))
             token_json['edits'] = {}
             cleaned = base64.urlsafe_b64encode(json.dumps(token_json).encode()).decode().rstrip("=")
@@ -290,7 +325,6 @@ class PrivacyScraper:
         except Exception:
             return image_url
 
-# ── Downloader ─────────────────────────────────────────────────────────────────
 
 class MediaDownloader:
     def __init__(self, cffi_session, privacy_scraper):
@@ -380,10 +414,8 @@ class MediaDownloader:
             if line.startswith('#EXT-X-SESSION-KEY') or line.startswith('#EXT-X-KEY'):
                 uri_match = re.search(r'URI="([^"]+)"', line)
                 if uri_match:
-                    key_url      = uri_match.group(1)
                     new_key_name = f"key_{key_counter}.key"
-                    key_path     = os.path.join(base_path, new_key_name)
-                    if self.download_file(key_url, key_path, file_id=file_id):
+                    if self.download_file(uri_match.group(1), os.path.join(base_path, new_key_name), file_id=file_id):
                         modified_content.append(line.replace(uri_match.group(0), f'URI="{new_key_name}"'))
                         key_counter += 1
             elif line.strip() and not line.startswith('#'):
@@ -431,14 +463,12 @@ class MediaDownloader:
         return media_id
 
     def _download_hls_video(self, file_url, filename, pbar=None):
-        """Baixa um vídeo HLS e converte para mp4. Retorna True em caso de sucesso."""
-        media_id  = self.ensure_media_id(None)
         file_id   = self.extract_file_id_from_url(file_url)
-        base_path = os.path.join(os.path.dirname(filename), f"{media_id}_temp")
+        base_path = os.path.join(os.path.dirname(filename), f"{self.ensure_media_id(None)}_temp")
         os.makedirs(base_path, exist_ok=True)
 
-        main_m3u8 = os.path.join(base_path, "main.m3u8")
         success   = False
+        main_m3u8 = os.path.join(base_path, "main.m3u8")
         if self.download_file(file_url, main_m3u8, is_video=True, file_id=file_id):
             with open(main_m3u8, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -484,22 +514,22 @@ class MediaDownloader:
 
         return photos, videos
 
-    def download_profile_media(self, profile_name, media_type="3", pbar=None):
-        total_media, _, _ = self.privacy_scraper.get_total_media_count(profile_name)
-        os.makedirs(f"./{profile_name}/fotos",   exist_ok=True)
-        os.makedirs(f"./{profile_name}/videos",  exist_ok=True)
+    def download_profile_media(self, profile_name, media_type="3", pbar=None, total_media=None):
+        if total_media is None:
+            total_media, _, _ = self.privacy_scraper.get_total_media_count(profile_name)
+        os.makedirs(f"./{profile_name}/fotos",  exist_ok=True)
+        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
 
         if total_media == 0:
             return 0, 0
 
         skip, downloaded_photos, downloaded_videos = 0, 0, 0
         while True:
-            unix_ts  = int(time.time() * 1000)
-            url      = (
+            response = self.privacy_scraper.cffi_session.get(
                 f"https://privacy.com.br/Profile?handler=PartialPosts"
-                f"&skip={skip}&take=10&nomePerfil={profile_name}&filter=mosaico&_={unix_ts}"
+                f"&skip={skip}&take=10&nomePerfil={profile_name}&filter=mosaico&_={int(time.time() * 1000)}",
+                impersonate="chrome120"
             )
-            response = self.privacy_scraper.cffi_session.get(url, impersonate="chrome120")
             if response.status_code == 200:
                 data = response.json()
                 if not data.get("mosaicItems"):
@@ -531,7 +561,6 @@ class MediaDownloader:
                 p, v = self._process_media_list(post.get("medias", []), profile_name, media_type, pbar)
                 downloaded_photos += p
                 downloaded_videos += v
-
             if len(media_data["items"]) < limit:
                 break
             offset += limit
@@ -551,11 +580,9 @@ class MediaDownloader:
             for chat in media_data["items"]:
                 if chat.get("creator", {}).get("profileName") != profile_name:
                     continue
-                files = chat.get("files") or chat.get("medias") or []
-                p, v  = self._process_media_list(files, profile_name, media_type, pbar)
+                p, v = self._process_media_list(chat.get("files") or chat.get("medias") or [], profile_name, media_type, pbar)
                 downloaded_photos += p
                 downloaded_videos += v
-
             if len(media_data["items"]) < limit:
                 break
             offset += limit
@@ -566,8 +593,8 @@ class MediaDownloader:
         total = 0
 
         if action in ["1", "4"]:
-            total_media, _, _ = self.privacy_scraper.get_total_media_count(profile_name)
-            total += total_media
+            self._cached_total_media, _, _ = self.privacy_scraper.get_total_media_count(profile_name)
+            total += self._cached_total_media
 
         if action in ["2", "4"]:
             offset, limit = 0, 20
@@ -596,8 +623,7 @@ class MediaDownloader:
                 for chat in media_data["items"]:
                     if chat.get("creator", {}).get("profileName") != profile_name:
                         continue
-                    files = chat.get("files") or chat.get("medias") or []
-                    for fd in files:
+                    for fd in chat.get("files") or chat.get("medias") or []:
                         if not fd.get("isLocked", True):
                             ft = fd.get("type", "")
                             if (ft == "image" and media_type in ["1", "3"]) or (ft == "video" and media_type in ["2", "3"]):
@@ -608,7 +634,6 @@ class MediaDownloader:
 
         return total
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def select_media_type():
     while True:
@@ -617,7 +642,6 @@ def select_media_type():
             return v
         print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
 
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     scraper = PrivacyScraper()
@@ -670,7 +694,7 @@ def main():
                 print("Opção inválida!")
                 continue
 
-            media_type      = select_media_type()
+            media_type       = select_media_type()
             media_downloader = MediaDownloader(scraper.cffi_session, scraper)
 
             print("Contando total de itens...")
@@ -691,10 +715,11 @@ def main():
                     p, v = media_downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
                     print(f"\nDownload do chat concluído! Fotos: {p}, Vídeos: {v}")
                 elif action == "4":
-                    p1, v1 = media_downloader.download_profile_media(profile_name, media_type, pbar)
+                    p1, v1 = media_downloader.download_profile_media(profile_name, media_type, pbar, total_media=getattr(media_downloader, '_cached_total_media', None))
                     p2, v2 = media_downloader.download_purchased_media_for_profile(profile_name, media_type, pbar)
                     p3, v3 = media_downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
                     print(f"\nDownload completo! Fotos: {p1+p2+p3}, Vídeos: {v1+v2+v3}")
+
 
 if __name__ == "__main__":
     main()
