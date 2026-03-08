@@ -47,3 +47,6 @@ python privacy_scraper.py
 
 ## Contato
 discord: st8rb 
+
+## Agradacimentos a:
+https://github.com/Theyka/Turnstile-Solver
