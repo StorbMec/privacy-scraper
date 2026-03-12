@@ -20,9 +20,6 @@ try:
 except ImportError:
     _CAMOUFOX_AVAILABLE = False
 
-RED = '\033[91m'
-RESET = '\033[0m'
-
 if not _CAMOUFOX_AVAILABLE:
     print(f"{RED}Erro: camoufox não instalado.{RESET}")
     print(f"{RED}Execute: pip install camoufox && python -m camoufox fetch{RESET}")
@@ -42,6 +39,9 @@ load_dotenv()
 TOKEN_CACHE_FILE = "token_cache.json"
 TURNSTILE_URL = "https://privacy.com.br"
 TURNSTILE_SITEKEY = "0x4AAAAAACDFv8IsPDbdsS-x"
+TQDM_FORMAT = "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}"
+RED = '\033[91m'
+RESET = '\033[0m'
 
 class TurnstileResolver:
     def __init__(self):
@@ -508,8 +508,6 @@ class MediaDownloader:
                     success = self.convert_m3u8_to_mp4(best_m3u8, filename)
 
         self.clean_temp_files(base_path)
-        if pbar:
-            pbar.update(1)
         return success
 
     def _process_media_list(self, files, profile_name, media_type, pbar):
@@ -538,8 +536,10 @@ class MediaDownloader:
                             if pbar:
                                 pbar.update(1)
                     else:
-                        if self._download_hls_video(file_url, filename, pbar):
+                        if self._download_hls_video(file_url, filename, pbar=None):
                             videos += 1
+                            if pbar:
+                                pbar.update(1)
 
         return photos, videos
 
@@ -734,21 +734,21 @@ def main():
                 print("Nenhuma mídia encontrada.")
                 continue
 
-            with tqdm(total=total_items, desc=f"Download {nickname}") as pbar:
+            with tqdm(total=total_items, desc=f"Download {nickname}", bar_format=TQDM_FORMAT) as pbar:
                 if action == "1":
                     p, v = downloader.download_profile_media(profile_name, media_type, pbar)
-                    print(f"\nDownload concluído! Fotos: {p}, Vídeos: {v}")
+                    tqdm.write(f"Download concluído! Fotos: {p}, Vídeos: {v}")
                 elif action == "2":
                     p, v = downloader.download_purchased_media_for_profile(profile_name, media_type, pbar)
-                    print(f"\nDownload de compras concluído! Fotos: {p}, Vídeos: {v}")
+                    tqdm.write(f"Download de compras concluído! Fotos: {p}, Vídeos: {v}")
                 elif action == "3":
                     p, v = downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
-                    print(f"\nDownload do chat concluído! Fotos: {p}, Vídeos: {v}")
+                    tqdm.write(f"Download do chat concluído! Fotos: {p}, Vídeos: {v}")
                 elif action == "4":
                     p1, v1 = downloader.download_profile_media(profile_name, media_type, pbar, total_media=getattr(downloader, '_cached_total_media', None))
                     p2, v2 = downloader.download_purchased_media_for_profile(profile_name, media_type, pbar)
                     p3, v3 = downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
-                    print(f"\nDownload completo! Fotos: {p1+p2+p3}, Vídeos: {v1+v2+v3}")
+                    tqdm.write(f"Download completo! Fotos: {p1+p2+p3}, Vídeos: {v1+v2+v3}")
 
 
 if __name__ == "__main__":
