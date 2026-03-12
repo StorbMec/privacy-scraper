@@ -1,116 +1,53 @@
-# ⚠️ Privacy Scraper ⚠️
-
-Script para baixar conteúdo de perfis do Privacy **nos quais você já é assinante**.
-
-⚠️ **Aviso de manutenção**  
-O script está **temporariamente em manutenção** até que seja resolvido um problema relacionado ao **download de vídeos**.  
-Downloads de **fotos podem continuar funcionando**, porém o download de **vídeos pode estar desativado ou instável no momento**.
-
----
-
-# Updates
-
+# Privacy Scraper
+Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automatica :)
+ 
+## Updates
+ 
+**12/03/2026**
+- Problema com download de vídeos resolvido
+ 
 **07/03/2026**
-
 - Bypass do captcha do Privacy implementado
-- Tokens de login agora são **armazenados localmente**, permitindo logins mais rápidos até expirarem
-
----
-
-# Como utilizar
-
-## 1. Instalar dependências
-
-```bash
+- Tokens de login agora são armazenados localmente, permitindo logins mais rápidos até expirarem
+ 
+## Como utilizar
+ 
+1. Instale os requerimentos utilizando o comando
+```
 pip install -r requirements.txt
 ```
-
----
-
-## 2. Criar arquivo `.env`
-
-Crie um arquivo chamado **.env** na raiz do projeto com o seguinte conteúdo:
-
-```env
+ 
+2. Crie um arquivo na raiz chamado .env com a seguinte arvore:
+```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
 DEBUG_MODE=false
 ```
-
----
-
-## 3. Executar o script
-
-```bash
+ 
+3. Após tudo configurado, apenas faça
+```
 python privacy_scraper.py
 ```
-
----
-
-## 4. Selecionar perfil
-
-Quando aparecer a lista de perfis:
-
-- Digite o **número do perfil desejado**
-- Ou digite **0** para varrer todos os perfis
-
----
-
-## 5. Selecionar tipo de mídia
-
-Escolha o tipo de conteúdo para download:
-
-```
-1 - Fotos
-2 - Vídeos
-3 - Ambos
-```
-
-⚠️ **Nota:** O download de **vídeos está temporariamente em manutenção**.
-
----
-
-# Dependência (FFmpeg)
-
-Necessário para processamento de mídia.
-
-Download:
-
+ 
+4. Quando aparecer a lista de perfis, aperta o numero do perfil escolhido ou 0 para sair.
+ 
+5. Depois selecione o tipo de midia, aperte o numero de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos).
+ 
+## Dependencias (FFmpeg)
+ 
 https://github.com/BtbN/FFmpeg-Builds/releases
-
-## Instalação
-
-1. Extraia o arquivo ZIP em uma pasta  
-Exemplo:
-
-```
-C:\ffmpeg\bin
-```
-
+ 
+1. Extraia o arquivo ZIP em uma pasta (ex: C:\ffmpeg\bin)
 2. Adicione o caminho do FFmpeg às variáveis de ambiente do sistema
+3. Pressione Win + S e digite "variáveis de ambiente"
+4. Clique em "Editar as variáveis de ambiente do sistema"
+5. Em "Variáveis do sistema", selecione Path > Editar > Novo
+6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
+ 
+## Contato
+ 
+Discord: st8rb
 
-### Passos
-
-1. Pressione **Win + S**
-2. Digite **variáveis de ambiente**
-3. Clique em **Editar as variáveis de ambiente do sistema**
-4. Em **Variáveis do sistema**, selecione **Path**
-5. Clique em **Editar**
-6. Clique em **Novo**
-7. Adicione:
-
-```
-C:\ffmpeg\bin
-```
-
----
-
-# Contato
-
-Discord: **st8rb**
-
----
-
-# Agradecimentos
+## Agradecimentos
 
 https://github.com/Theyka/Turnstile-Solver
