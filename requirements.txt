@@ -1,0 +1,6 @@
+beautifulsoup4==4.14.3
+camoufox==0.4.11
+curl_cffi==0.14.0
+ffmpeg==1.4
+python-dotenv==1.2.2
+tqdm==4.67.3
