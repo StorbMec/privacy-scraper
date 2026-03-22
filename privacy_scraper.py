@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import ffmpeg
 import re
 import urllib.parse
 import shutil
@@ -19,6 +18,9 @@ try:
     _CAMOUFOX_AVAILABLE = True
 except ImportError:
     _CAMOUFOX_AVAILABLE = False
+
+RED = '\033[91m'
+RESET = '\033[0m'
 
 if not _CAMOUFOX_AVAILABLE:
     print(f"{RED}Erro: camoufox não instalado.{RESET}")
@@ -40,8 +42,8 @@ TOKEN_CACHE_FILE = "token_cache.json"
 TURNSTILE_URL = "https://privacy.com.br"
 TURNSTILE_SITEKEY = "0x4AAAAAACDFv8IsPDbdsS-x"
 TQDM_FORMAT = "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}"
-RED = '\033[91m'
-RESET = '\033[0m'
+TOKEN_REFRESH_MARGIN = 1800
+
 
 class TurnstileResolver:
     def __init__(self):
@@ -121,6 +123,7 @@ class TurnstileResolver:
             self._instance = None
             raise e
 
+
 class TokenCache:
     def __init__(self, cache_file=TOKEN_CACHE_FILE):
         self.cache_file = cache_file
@@ -151,7 +154,7 @@ class TokenCache:
             return None
         if account_data.get("email") != email:
             return None
-        if time.time() >= account_data.get("expires_at", 0) - 300:
+        if time.time() >= account_data.get("expires_at", 0) - TOKEN_REFRESH_MARGIN:
             return None
         return account_data
 
@@ -169,6 +172,7 @@ class TokenCache:
         if os.path.isfile(self.cache_file):
             os.remove(self.cache_file)
 
+
 class PrivacyScraper:
     def __init__(self):
         self.session = cffi_requests.Session()
@@ -176,6 +180,7 @@ class PrivacyScraper:
         self.password = os.getenv('PASSWORD')
         self.token_v1 = None
         self.token_v2 = None
+        self.token_expires_at = None
         self.cache = TokenCache()
         self.turnstile = TurnstileResolver()
 
@@ -205,16 +210,7 @@ class PrivacyScraper:
         )
         return response.status_code == 200
 
-    def login(self):
-        cached = self.cache.get_token(self.email)
-        if cached:
-            if self._apply_tokens(cached["token_v1"], cached["token_v2"]):
-                return True
-
-        turnstile_token = self.turnstile.resolve()
-        if not turnstile_token:
-            return False
-
+    def _do_login_request(self, turnstile_token):
         response = self.session.post(
             "https://service.privacy.com.br/auth/login",
             json={
@@ -237,16 +233,41 @@ class PrivacyScraper:
             },
             impersonate="chrome120"
         )
-
         if response.status_code == 200:
             tokens = response.json()
             t1, t2 = tokens.get("tokenV1"), tokens.get("token")
             if self._apply_tokens(t1, t2):
                 expires_at = self._decode_token_expiry(t2) or (int(time.time()) + 3600)
+                self.token_expires_at = expires_at
                 self.cache.set_token(self.email, t1, t2, expires_at)
                 return True
-
         return False
+
+    def login(self):
+        cached = self.cache.get_token(self.email)
+        if cached:
+            if self._apply_tokens(cached["token_v1"], cached["token_v2"]):
+                self.token_expires_at = cached.get("expires_at")
+                return True
+
+        turnstile_token = self.turnstile.resolve()
+        if not turnstile_token:
+            return False
+
+        return self._do_login_request(turnstile_token)
+
+    def refresh_token_if_needed(self):
+        if not self.token_expires_at:
+            return
+        remaining = self.token_expires_at - time.time()
+        if remaining <= TOKEN_REFRESH_MARGIN:
+            print("\nToken próximo de expirar, renovando...")
+            self.cache.clear()
+            turnstile_token = self.turnstile.resolve()
+            if turnstile_token and self._do_login_request(turnstile_token):
+                print("Token renovado com sucesso!")
+            else:
+                print(f"{RED}Falha ao renovar token!{RESET}")
 
     def get_profiles(self):
         if not self.token_v2:
@@ -274,14 +295,14 @@ class PrivacyScraper:
             if tabs_div:
                 posts_tab = tabs_div.find('div', {'data-view': 'posts'})
                 if posts_tab:
-                    m = re.search(r'(\d+)\s+(?:Posts|Postagens)', posts_tab.get_text(strip=True))
+                    m = re.search(r'([\d.,]+)\s+(?:Posts|Postagens)', posts_tab.get_text(strip=True))
                     if m:
-                        total_posts = int(m.group(1))
+                        total_posts = int(re.sub(r'[.,]', '', m.group(1)))
                 media_tab = tabs_div.find('div', {'data-view': 'mosaic'})
                 if media_tab:
-                    m = re.search(r'(\d+)\s+(?:Media|Mídias)', media_tab.get_text(strip=True))
+                    m = re.search(r'([\d.,]+)\s+(?:Media|Mídias)', media_tab.get_text(strip=True))
                     if m:
-                        total_media = int(m.group(1))
+                        total_media = int(re.sub(r'[.,]', '', m.group(1)))
 
         return total_media, total_posts
 
@@ -359,6 +380,7 @@ class MediaDownloader:
         self.scraper = scraper
 
     def download_file(self, url, filename, is_video=False, file_id=None, is_image=False, use_original_url=False):
+        self.scraper.refresh_token_if_needed()
         headers = {"Referer": "https://privacy.com.br/", "Origin": "https://privacy.com.br"}
         final_url = url
 
@@ -554,6 +576,7 @@ class MediaDownloader:
 
         skip, downloaded_photos, downloaded_videos = 0, 0, 0
         while True:
+            self.scraper.refresh_token_if_needed()
             response = self.scraper.session.get(
                 f"https://privacy.com.br/Profile?handler=PartialPosts"
                 f"&skip={skip}&take=10&nomePerfil={profile_name}&filter=mosaico&_={int(time.time() * 1000)}",
@@ -581,6 +604,7 @@ class MediaDownloader:
         offset, limit = 0, 20
         downloaded_photos, downloaded_videos = 0, 0
         while True:
+            self.scraper.refresh_token_if_needed()
             media_data = self.scraper.get_purchased_media(offset, limit)
             if not media_data or not media_data.get("items"):
                 break
@@ -603,6 +627,7 @@ class MediaDownloader:
         offset, limit = 0, 20
         downloaded_photos, downloaded_videos = 0, 0
         while True:
+            self.scraper.refresh_token_if_needed()
             media_data = self.scraper.get_chat_media(offset, limit)
             if not media_data or not media_data.get("items"):
                 break
