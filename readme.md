@@ -2,7 +2,10 @@
 Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automatica :)
  
 ## Updates
- 
+
+**22/03/2026**
+- Problema com midias acima de 1000+
+
 **12/03/2026**
 - Problema com download de vídeos resolvido
  
