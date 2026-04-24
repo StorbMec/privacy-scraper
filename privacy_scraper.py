@@ -8,6 +8,7 @@ import uuid
 import base64
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from tqdm import tqdm
@@ -20,6 +21,7 @@ except ImportError:
     _CAMOUFOX_AVAILABLE = False
 
 RED = '\033[91m'
+GREEN = '\033[92m'
 RESET = '\033[0m'
 
 if not _CAMOUFOX_AVAILABLE:
@@ -43,6 +45,10 @@ TURNSTILE_URL = "https://privacy.com.br"
 TURNSTILE_SITEKEY = "0x4AAAAAACDFv8IsPDbdsS-x"
 TQDM_FORMAT = "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}"
 TOKEN_REFRESH_MARGIN = 1800
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
+
+MAX_WORKERS_MEDIA = 8
+MAX_WORKERS_HLS = 16
 
 
 class TurnstileResolver:
@@ -56,6 +62,15 @@ class TurnstileResolver:
             self._instance = Camoufox(headless=True)
             self._browser = self._instance.start()
         return self._browser
+
+    def close(self):
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        except Exception:
+            pass
+        self._browser = None
+        self._instance = None
 
     def resolve(self):
         dots = 0
@@ -102,7 +117,7 @@ class TurnstileResolver:
                     try:
                         value = page.input_value("[name=cf-turnstile-response]", timeout=2000)
                         if value:
-                            stop_anim("\n")
+                            stop_anim("OK")
                             return value
                         page.locator("//div[@class='cf-turnstile']").click(timeout=1000)
                     except Exception:
@@ -115,12 +130,7 @@ class TurnstileResolver:
                 page.close()
         except Exception as e:
             stop_anim("Erro")
-            try:
-                self._browser.close()
-            except Exception:
-                pass
-            self._browser = None
-            self._instance = None
+            self.close()
             raise e
 
 
@@ -183,6 +193,7 @@ class PrivacyScraper:
         self.token_expires_at = None
         self.cache = TokenCache()
         self.turnstile = TurnstileResolver()
+        self._refresh_lock = threading.Lock()
 
         if os.getenv('DEBUG_MODE', 'false').lower() in ['true', '1', 'yes']:
             self.session.proxies = {
@@ -259,15 +270,19 @@ class PrivacyScraper:
     def refresh_token_if_needed(self):
         if not self.token_expires_at:
             return
-        remaining = self.token_expires_at - time.time()
-        if remaining <= TOKEN_REFRESH_MARGIN:
-            print("\nToken próximo de expirar, renovando...")
+        if self.token_expires_at - time.time() > TOKEN_REFRESH_MARGIN:
+            return
+
+        with self._refresh_lock:
+            if self.token_expires_at - time.time() > TOKEN_REFRESH_MARGIN:
+                return
+            tqdm.write("\nToken próximo de expirar, renovando...")
             self.cache.clear()
             turnstile_token = self.turnstile.resolve()
             if turnstile_token and self._do_login_request(turnstile_token):
-                print("Token renovado com sucesso!")
+                tqdm.write("Token renovado com sucesso!")
             else:
-                print(f"{RED}Falha ao renovar token!{RESET}")
+                tqdm.write(f"{RED}Falha ao renovar token!{RESET}")
 
     def get_profiles(self):
         if not self.token_v2:
@@ -375,9 +390,12 @@ class PrivacyScraper:
 
 
 class MediaDownloader:
-    def __init__(self, session, scraper):
+    def __init__(self, session, scraper, max_workers_media=MAX_WORKERS_MEDIA, max_workers_hls=MAX_WORKERS_HLS):
         self.session = session
         self.scraper = scraper
+        self.max_workers_media = max_workers_media
+        self.max_workers_hls = max_workers_hls
+        self._pbar_lock = threading.Lock()
 
     def download_file(self, url, filename, is_video=False, file_id=None, is_image=False, use_original_url=False):
         self.scraper.refresh_token_if_needed()
@@ -422,14 +440,29 @@ class MediaDownloader:
                     "Sec-Fetch-Dest": "empty",
                     "Accept-Encoding": "gzip, deflate, br, zstd"
                 })
+
+        target_dir = os.path.dirname(os.path.abspath(filename))
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+
         try:
-            response = self.session.get(final_url, headers=headers, impersonate="chrome120")
+            response = self.session.get(final_url, headers=headers, impersonate="chrome120", stream=True)
             if response.status_code in (200, 206):
                 with open(filename, 'wb') as f:
-                    f.write(response.content)
+                    for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                        if chunk:
+                            f.write(chunk)
                 return True
             return False
         except Exception:
+            try:
+                response = self.session.get(final_url, headers=headers, impersonate="chrome120")
+                if response.status_code in (200, 206):
+                    with open(filename, 'wb') as f:
+                        f.write(response.content)
+                    return True
+            except Exception:
+                pass
             return False
 
     def download_image_with_fallback(self, url, filename):
@@ -438,8 +471,8 @@ class MediaDownloader:
         return self.download_file(url, filename, is_image=True, use_original_url=True)
 
     def get_best_quality_m3u8(self, main_m3u8_url, main_m3u8_content):
-        lines, best_quality_url, max_bandwidth, current_bandwidth = main_m3u8_content.split('\n'), None, 0, 0
-        for line in lines:
+        best_quality_url, max_bandwidth, current_bandwidth = None, 0, 0
+        for line in main_m3u8_content.split('\n'):
             if line.startswith('#EXT-X-STREAM-INF'):
                 m = re.search(r'BANDWIDTH=(\d+)', line)
                 if m:
@@ -458,22 +491,40 @@ class MediaDownloader:
         with open(m3u8_filename, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        lines, modified_content, key_counter = content.split('\n'), [], 1
-        for line in lines:
+        modified_content = []
+        key_tasks = []
+        segment_tasks = []
+        key_counter = 1
+
+        for line in content.split('\n'):
             if line.startswith('#EXT-X-SESSION-KEY') or line.startswith('#EXT-X-KEY'):
                 uri_match = re.search(r'URI="([^"]+)"', line)
                 if uri_match:
                     new_key_name = f"key_{key_counter}.key"
-                    if self.download_file(uri_match.group(1), os.path.join(base_path, new_key_name), file_id=file_id):
-                        modified_content.append(line.replace(uri_match.group(0), f'URI="{new_key_name}"'))
-                        key_counter += 1
+                    key_counter += 1
+                    key_tasks.append((uri_match.group(1), os.path.join(base_path, new_key_name)))
+                    modified_content.append(line.replace(uri_match.group(0), f'URI="{new_key_name}"'))
+                else:
+                    modified_content.append(line)
             elif line.strip() and not line.startswith('#'):
                 segment_url = urllib.parse.urljoin(m3u8_url, line.strip())
                 segment_filename = os.path.join(base_path, os.path.basename(segment_url))
-                self.download_file(segment_url, segment_filename, file_id=file_id)
+                segment_tasks.append((segment_url, segment_filename))
                 modified_content.append(os.path.basename(segment_filename))
             else:
                 modified_content.append(line)
+
+        for key_url, key_path in key_tasks:
+            self.download_file(key_url, key_path, file_id=file_id)
+
+        if segment_tasks:
+            with ThreadPoolExecutor(max_workers=self.max_workers_hls) as pool:
+                futures = [
+                    pool.submit(self.download_file, url, path, is_video=False, file_id=file_id)
+                    for url, path in segment_tasks
+                ]
+                for _ in as_completed(futures):
+                    pass
 
         with open(m3u8_filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(modified_content))
@@ -494,7 +545,7 @@ class MediaDownloader:
             )
             return result.returncode == 0
         except Exception as e:
-            print(f"\nErro na conversão: {e}")
+            tqdm.write(f"\nErro na conversão: {e}")
             return False
 
     def clean_temp_files(self, base_path):
@@ -513,96 +564,132 @@ class MediaDownloader:
             return str(uuid.uuid4())
         return media_id
 
-    def _download_hls_video(self, file_url, filename, pbar=None):
+    def _download_hls_video(self, file_url, filename):
         file_id = self.extract_file_id_from_url(file_url)
-        base_path = os.path.join(os.path.dirname(filename), f"{self.ensure_media_id(None)}_temp")
+        base_path = os.path.join(os.path.dirname(filename), f"{uuid.uuid4()}_temp")
         os.makedirs(base_path, exist_ok=True)
 
-        success = False
-        main_m3u8 = os.path.join(base_path, "main.m3u8")
-        if self.download_file(file_url, main_m3u8, is_video=True, file_id=file_id):
+        try:
+            main_m3u8 = os.path.join(base_path, "main.m3u8")
+            if not self.download_file(file_url, main_m3u8, is_video=True, file_id=file_id):
+                return False
             with open(main_m3u8, 'r', encoding='utf-8') as f:
                 content = f.read()
             best_url = self.get_best_quality_m3u8(file_url, content)
-            if best_url:
-                best_m3u8 = self.process_m3u8(best_url, base_path, file_id)
-                if best_m3u8 and os.path.exists(best_m3u8):
-                    success = self.convert_m3u8_to_mp4(best_m3u8, filename)
+            if not best_url:
+                return False
+            best_m3u8 = self.process_m3u8(best_url, base_path, file_id)
+            if best_m3u8 and os.path.exists(best_m3u8):
+                return self.convert_m3u8_to_mp4(best_m3u8, filename)
+            return False
+        finally:
+            self.clean_temp_files(base_path)
 
-        self.clean_temp_files(base_path)
-        return success
+    def _download_single_media(self, file_data, profile_name, media_type):
+        if file_data.get("isLocked", True):
+            return (None, False)
+        file_type = file_data.get("type", "")
+        file_url = file_data.get("url", "")
+        media_id = self.ensure_media_id(file_data.get("mediaId"))
 
-    def _process_media_list(self, files, profile_name, media_type, pbar):
-        photos, videos = 0, 0
-        for file_data in files:
-            if file_data.get("isLocked", True):
+        if file_type == "image" and media_type in ["1", "3"]:
+            filename = f"./{profile_name}/fotos/{media_id}.jpg"
+            if os.path.exists(filename):
+                return ("photo", False)
+            ok = self.download_image_with_fallback(file_url, filename)
+            return ("photo", ok)
+
+        if file_type == "video" and media_type in ["2", "3"]:
+            filename = f"./{profile_name}/videos/{media_id}.mp4"
+            if os.path.exists(filename):
+                return ("video", False)
+            if '.mp4' in file_url:
+                ok = self.download_file(file_url, filename, is_video=True)
+            else:
+                ok = self._download_hls_video(file_url, filename)
+            return ("video", ok)
+
+        return (None, False)
+
+    def _collect_eligible(self, files, media_type):
+        for f in files:
+            if f.get("isLocked", True):
                 continue
-            file_type = file_data.get("type", "")
-            file_url = file_data.get("url", "")
-            media_id = self.ensure_media_id(file_data.get("mediaId"))
+            ft = f.get("type", "")
+            if ft == "image" and media_type in ["1", "3"]:
+                yield f
+            elif ft == "video" and media_type in ["2", "3"]:
+                yield f
 
-            if file_type == "image" and media_type in ["1", "3"]:
-                filename = f"./{profile_name}/fotos/{media_id}.jpg"
-                if not os.path.exists(filename):
-                    if self.download_image_with_fallback(file_url, filename):
-                        photos += 1
-                        if pbar:
-                            pbar.update(1)
+    def _discover(self, iterator, discover_label):
+        items = []
+        with tqdm(
+            total=0,
+            desc=discover_label,
+            bar_format="{desc}: {n} encontradas",
+            leave=False,
+        ) as d:
+            for it in iterator:
+                items.append(it)
+                d.update(1)
+        return items
 
-            elif file_type == "video" and media_type in ["2", "3"]:
-                filename = f"./{profile_name}/videos/{media_id}.mp4"
-                if not os.path.exists(filename):
-                    if '.mp4' in file_url:
-                        if self.download_file(file_url, filename, is_video=True):
-                            videos += 1
-                            if pbar:
-                                pbar.update(1)
-                    else:
-                        if self._download_hls_video(file_url, filename, pbar=None):
-                            videos += 1
-                            if pbar:
-                                pbar.update(1)
-
-        return photos, videos
-
-    def download_profile_media(self, profile_name, media_type="3", pbar=None, total_media=None):
-        if total_media is None:
-            total_media, _ = self.scraper.get_total_media_count(profile_name)
+    def _drain(self, iterator, profile_name, media_type, pbar, discover_label):
         os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
         os.makedirs(f"./{profile_name}/videos", exist_ok=True)
 
-        if total_media == 0:
+        items = self._discover(iterator, discover_label)
+        if not items:
             return 0, 0
 
-        skip, downloaded_photos, downloaded_videos = 0, 0, 0
-        while True:
+        if pbar is not None:
+            with self._pbar_lock:
+                pbar.total = (pbar.total or 0) + len(items)
+                pbar.refresh()
+
+        counters = {"photos": 0, "videos": 0}
+        counter_lock = threading.Lock()
+
+        def task(item):
+            try:
+                return self._download_single_media(item, profile_name, media_type)
+            except Exception as e:
+                tqdm.write(f"{RED}Erro no download: {e}{RESET}")
+                return (None, False)
+
+        with ThreadPoolExecutor(max_workers=self.max_workers_media) as pool:
+            futures = [pool.submit(task, it) for it in items]
+            for f in as_completed(futures):
+                kind, ok = f.result()
+                if pbar is not None:
+                    with self._pbar_lock:
+                        pbar.update(1)
+                if ok and kind in ("photo", "video"):
+                    with counter_lock:
+                        counters[f"{kind}s"] += 1
+
+        return counters["photos"], counters["videos"]
+
+    def _iter_profile_media(self, profile_name, media_type, total_media):
+        skip = 0
+        while skip < total_media:
             self.scraper.refresh_token_if_needed()
             response = self.scraper.session.get(
                 f"https://privacy.com.br/Profile?handler=PartialPosts"
                 f"&skip={skip}&take=10&nomePerfil={profile_name}&filter=mosaico&_={int(time.time() * 1000)}",
                 impersonate="chrome120"
             )
-            if response.status_code == 200:
-                data = response.json()
-                if not data.get("mosaicItems"):
-                    break
-                for item in data.get("mosaicItems", []):
-                    p, v = self._process_media_list(item.get("files", []), profile_name, media_type, pbar)
-                    downloaded_photos += p
-                    downloaded_videos += v
-
-            skip += 10
-            if skip >= total_media:
+            if response.status_code != 200:
                 break
+            data = response.json()
+            if not data.get("mosaicItems"):
+                break
+            for item in data.get("mosaicItems", []):
+                yield from self._collect_eligible(item.get("files", []), media_type)
+            skip += 10
 
-        return downloaded_photos, downloaded_videos
-
-    def download_purchased_media_for_profile(self, profile_name, media_type="3", pbar=None):
-        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
-        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
-
+    def _iter_purchased_media(self, profile_name, media_type):
         offset, limit = 0, 20
-        downloaded_photos, downloaded_videos = 0, 0
         while True:
             self.scraper.refresh_token_if_needed()
             media_data = self.scraper.get_purchased_media(offset, limit)
@@ -611,21 +698,13 @@ class MediaDownloader:
             for post in media_data["items"]:
                 if post.get("creator", {}).get("profileName") != profile_name:
                     continue
-                p, v = self._process_media_list(post.get("medias", []), profile_name, media_type, pbar)
-                downloaded_photos += p
-                downloaded_videos += v
+                yield from self._collect_eligible(post.get("medias", []), media_type)
             if len(media_data["items"]) < limit:
                 break
             offset += limit
 
-        return downloaded_photos, downloaded_videos
-
-    def download_chat_media_for_profile(self, profile_name, media_type="3", pbar=None):
-        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
-        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
-
+    def _iter_chat_media(self, profile_name, media_type):
         offset, limit = 0, 20
-        downloaded_photos, downloaded_videos = 0, 0
         while True:
             self.scraper.refresh_token_if_needed()
             media_data = self.scraper.get_chat_media(offset, limit)
@@ -634,60 +713,83 @@ class MediaDownloader:
             for chat in media_data["items"]:
                 if chat.get("creator", {}).get("profileName") != profile_name:
                     continue
-                p, v = self._process_media_list(chat.get("files") or chat.get("medias") or [], profile_name, media_type, pbar)
-                downloaded_photos += p
-                downloaded_videos += v
+                files = chat.get("files") or chat.get("medias") or []
+                yield from self._collect_eligible(files, media_type)
             if len(media_data["items"]) < limit:
                 break
             offset += limit
 
-        return downloaded_photos, downloaded_videos
+    def download_profile_media(self, profile_name, media_type="3", pbar=None):
+        total_media, _ = self.scraper.get_total_media_count(profile_name)
+        if total_media == 0:
+            return 0, 0
+        return self._drain(
+            self._iter_profile_media(profile_name, media_type, total_media),
+            profile_name, media_type, pbar, "Descobrindo mídias do perfil"
+        )
 
-    def count_total_items(self, profile_name, media_type, action):
-        total = 0
+    def download_purchased_media_for_profile(self, profile_name, media_type="3", pbar=None):
+        return self._drain(
+            self._iter_purchased_media(profile_name, media_type),
+            profile_name, media_type, pbar, "Descobrindo mídias compradas"
+        )
 
-        if action in ["1", "4"]:
-            media_count, _ = self.scraper.get_total_media_count(profile_name)
-            self._cached_total_media = media_count
-            total += media_count
+    def download_chat_media_for_profile(self, profile_name, media_type="3", pbar=None):
+        return self._drain(
+            self._iter_chat_media(profile_name, media_type),
+            profile_name, media_type, pbar, "Descobrindo mídias do chat"
+        )
 
-        if action in ["2", "4"]:
-            offset, limit = 0, 20
-            while True:
-                media_data = self.scraper.get_purchased_media(offset, limit)
-                if not media_data or not media_data.get("items"):
-                    break
-                for post in media_data["items"]:
-                    if post.get("creator", {}).get("profileName") != profile_name:
-                        continue
-                    for media in post.get("medias", []):
-                        if not media.get("isLocked", True):
-                            ft = media.get("type", "")
-                            if (ft == "image" and media_type in ["1", "3"]) or (ft == "video" and media_type in ["2", "3"]):
-                                total += 1
-                if len(media_data["items"]) < limit:
-                    break
-                offset += limit
+    def download_all(self, profile_name, media_type="3", pbar=None):
+        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
+        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
 
-        if action in ["3", "4"]:
-            offset, limit = 0, 20
-            while True:
-                media_data = self.scraper.get_chat_media(offset, limit)
-                if not media_data or not media_data.get("items"):
-                    break
-                for chat in media_data["items"]:
-                    if chat.get("creator", {}).get("profileName") != profile_name:
-                        continue
-                    for fd in chat.get("files") or chat.get("medias") or []:
-                        if not fd.get("isLocked", True):
-                            ft = fd.get("type", "")
-                            if (ft == "image" and media_type in ["1", "3"]) or (ft == "video" and media_type in ["2", "3"]):
-                                total += 1
-                if len(media_data["items"]) < limit:
-                    break
-                offset += limit
+        total_media, _ = self.scraper.get_total_media_count(profile_name)
+        items = []
+        if total_media > 0:
+            items += self._discover(
+                self._iter_profile_media(profile_name, media_type, total_media),
+                "Descobrindo mídias do perfil",
+            )
+        items += self._discover(
+            self._iter_purchased_media(profile_name, media_type),
+            "Descobrindo mídias compradas",
+        )
+        items += self._discover(
+            self._iter_chat_media(profile_name, media_type),
+            "Descobrindo mídias do chat",
+        )
 
-        return total
+        if not items:
+            return 0, 0
+
+        if pbar is not None:
+            with self._pbar_lock:
+                pbar.total = (pbar.total or 0) + len(items)
+                pbar.refresh()
+
+        counters = {"photos": 0, "videos": 0}
+        counter_lock = threading.Lock()
+
+        def task(item):
+            try:
+                return self._download_single_media(item, profile_name, media_type)
+            except Exception as e:
+                tqdm.write(f"{RED}Erro no download: {e}{RESET}")
+                return (None, False)
+
+        with ThreadPoolExecutor(max_workers=self.max_workers_media) as pool:
+            futures = [pool.submit(task, it) for it in items]
+            for f in as_completed(futures):
+                kind, ok = f.result()
+                if pbar is not None:
+                    with self._pbar_lock:
+                        pbar.update(1)
+                if ok and kind in ("photo", "video"):
+                    with counter_lock:
+                        counters[f"{kind}s"] += 1
+
+        return counters["photos"], counters["videos"]
 
 
 def select_media_type():
@@ -696,6 +798,22 @@ def select_media_type():
         if v in {'1', '2', '3'}:
             return v
         print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
+
+
+def ask_int(prompt, default, min_value=1, max_value=64):
+    while True:
+        raw = input(f"{prompt} [padrão {default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            n = int(raw)
+        except ValueError:
+            print(f"Erro: digite um número entre {min_value} e {max_value}")
+            continue
+        if not (min_value <= n <= max_value):
+            print(f"Erro: valor fora do intervalo ({min_value}-{max_value})")
+            continue
+        return n
 
 
 def main():
@@ -710,6 +828,9 @@ def main():
     if not profiles:
         print("Nenhum perfil encontrado.")
         return
+
+    last_workers_media = MAX_WORKERS_MEDIA
+    last_workers_hls = MAX_WORKERS_HLS
 
     while True:
         print("\n=== PERFIS DISPONÍVEIS ===")
@@ -750,16 +871,21 @@ def main():
                 continue
 
             media_type = select_media_type()
-            downloader = MediaDownloader(scraper.session, scraper)
 
-            print("Contando total de itens...")
-            total_items = downloader.count_total_items(profile_name, media_type, action)
+            workers_media = ask_int(
+                "Threads para downloads de mídia em paralelo?",
+                last_workers_media, 1, 64
+            )
+            workers_hls = ask_int(
+                "Threads para segmentos HLS (dentro de cada vídeo HLS)?",
+                last_workers_hls, 1, 64
+            )
+            last_workers_media, last_workers_hls = workers_media, workers_hls
+            print(f"{GREEN}Usando {workers_media} threads p/ mídia, {workers_hls} threads p/ HLS.{RESET}")
 
-            if total_items == 0:
-                print("Nenhuma mídia encontrada.")
-                continue
+            downloader = MediaDownloader(scraper.session, scraper, workers_media, workers_hls)
 
-            with tqdm(total=total_items, desc=f"Download {nickname}", bar_format=TQDM_FORMAT) as pbar:
+            with tqdm(total=0, desc=f"Download {nickname}", bar_format=TQDM_FORMAT) as pbar:
                 if action == "1":
                     p, v = downloader.download_profile_media(profile_name, media_type, pbar)
                     tqdm.write(f"Download concluído! Fotos: {p}, Vídeos: {v}")
@@ -770,10 +896,10 @@ def main():
                     p, v = downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
                     tqdm.write(f"Download do chat concluído! Fotos: {p}, Vídeos: {v}")
                 elif action == "4":
-                    p1, v1 = downloader.download_profile_media(profile_name, media_type, pbar, total_media=getattr(downloader, '_cached_total_media', None))
-                    p2, v2 = downloader.download_purchased_media_for_profile(profile_name, media_type, pbar)
-                    p3, v3 = downloader.download_chat_media_for_profile(profile_name, media_type, pbar)
-                    tqdm.write(f"Download completo! Fotos: {p1+p2+p3}, Vídeos: {v1+v2+v3}")
+                    p, v = downloader.download_all(profile_name, media_type, pbar)
+                    tqdm.write(f"Download completo! Fotos: {p}, Vídeos: {v}")
+
+    scraper.turnstile.close()
 
 
 if __name__ == "__main__":
