@@ -2,15 +2,9 @@
 Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automatica :)
  
 ## Updates
-<<<<<<< HEAD
-
-**22/03/2026**
-- Problema com midias acima de 1000+
-=======
  
 **23/04/2026**
 - Aumentado velocidade dos downloads com paralelização
->>>>>>> 5c07716 (aumentado velocidade de downloads)
 
 **12/03/2026**
 - Problema com download de vídeos resolvido
