@@ -2,6 +2,7 @@ import json
 import os
 import time
 import re
+from datetime import datetime
 import urllib.parse
 import shutil
 import uuid
@@ -567,6 +568,38 @@ class MediaDownloader:
             return str(uuid.uuid4())
         return media_id
 
+    def format_post_date(self, raw_date):
+        if not raw_date:
+            return "unknown-date"
+
+        date_text = str(raw_date).strip()
+        if not date_text:
+            return "unknown-date"
+
+        formats = [
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%m/%d/%Y %I:%M:%S %p",
+            "%m/%d/%Y %I:%M %p",
+            "%Y-%m-%d",
+        ]
+
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_text, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+
+        try:
+            return datetime.fromisoformat(date_text.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+        except ValueError:
+            return "unknown-date"
+
+    def build_media_stem(self, post_date, post_id, media_id):
+        normalized_date = self.format_post_date(post_date)
+        normalized_post_id = str(post_id).strip() if post_id else "unknown-post"
+        return f"{normalized_date}_{normalized_post_id}_{media_id}"
+
     def _download_hls_video(self, file_url, filename):
         file_id = self.extract_file_id_from_url(file_url)
         base_path = os.path.join(os.path.dirname(filename), f"{uuid.uuid4()}_temp")
@@ -588,24 +621,29 @@ class MediaDownloader:
         finally:
             self.clean_temp_files(base_path)
 
-    def _download_single_media(self, file_data, profile_name, media_type):
+    def _download_single_media(self, media_item, profile_name, media_type):
+        file_data = media_item.get("file", {})
         if file_data.get("isLocked", True):
             return (None, False)
+
         file_type = file_data.get("type", "")
         file_url = file_data.get("url", "")
         media_id = self.ensure_media_id(file_data.get("mediaId"))
+        post_id = media_item.get("post_id")
+        post_date = media_item.get("post_date")
+        media_stem = self.build_media_stem(post_date, post_id, media_id)
 
         base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
 
         if file_type == "image" and media_type in ["1", "3"]:
-            filename = os.path.join(base_dir, "fotos", f"{media_id}.jpg")
+            filename = os.path.join(base_dir, "fotos", f"{media_stem}.jpg")
             if os.path.exists(filename):
                 return ("photo", False)
             ok = self.download_image_with_fallback(file_url, filename)
             return ("photo", ok)
 
         if file_type == "video" and media_type in ["2", "3"]:
-            filename = os.path.join(base_dir, "videos", f"{media_id}.mp4")
+            filename = os.path.join(base_dir, "videos", f"{media_stem}.mp4")
             if os.path.exists(filename):
                 return ("video", False)
             if '.mp4' in file_url:
@@ -616,15 +654,15 @@ class MediaDownloader:
 
         return (None, False)
 
-    def _collect_eligible(self, files, media_type):
+    def _collect_eligible(self, files, media_type, post_id=None, post_date=None):
         for f in files:
             if f.get("isLocked", True):
                 continue
             ft = f.get("type", "")
             if ft == "image" and media_type in ["1", "3"]:
-                yield f
+                yield {"file": f, "post_id": post_id, "post_date": post_date}
             elif ft == "video" and media_type in ["2", "3"]:
-                yield f
+                yield {"file": f, "post_id": post_id, "post_date": post_date}
 
     def _discover(self, iterator, discover_label):
         items = []
@@ -693,7 +731,9 @@ class MediaDownloader:
             if not data.get("mosaicItems"):
                 break
             for item in data.get("mosaicItems", []):
-                yield from self._collect_eligible(item.get("files", []), media_type)
+                post_id = item.get("postId")
+                post_date = item.get("postDate") or item.get("publishedDate")
+                yield from self._collect_eligible(item.get("files", []), media_type, post_id, post_date)
             skip += 10
 
     def _iter_purchased_media(self, profile_name, media_type):
@@ -706,7 +746,12 @@ class MediaDownloader:
             for post in media_data["items"]:
                 if post.get("creator", {}).get("profileName") != profile_name:
                     continue
-                yield from self._collect_eligible(post.get("medias", []), media_type)
+                yield from self._collect_eligible(
+                    post.get("medias", []),
+                    media_type,
+                    post.get("postId"),
+                    post.get("publishedDate") or post.get("postDate"),
+                )
             if len(media_data["items"]) < limit:
                 break
             offset += limit
@@ -722,7 +767,12 @@ class MediaDownloader:
                 if chat.get("creator", {}).get("profileName") != profile_name:
                     continue
                 files = chat.get("files") or chat.get("medias") or []
-                yield from self._collect_eligible(files, media_type)
+                yield from self._collect_eligible(
+                    files,
+                    media_type,
+                    chat.get("postId") or chat.get("id"),
+                    chat.get("publishedDate") or chat.get("postDate") or chat.get("createdAt"),
+                )
             if len(media_data["items"]) < limit:
                 break
             offset += limit
