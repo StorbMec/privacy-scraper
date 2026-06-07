@@ -20,13 +20,20 @@ Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automati
 pip install -r requirements.txt
 ```
  
-2. Crie um arquivo na raiz chamado .env com a seguinte arvore:
+2. Crie um arquivo na raiz chamado .env com a seguinte estrutura:
 ```
 EMAIL=exemplo@gmail.com
 PASSWORD=exemplo123
 DEBUG_MODE=false
+DOWNLOAD_BASE_PATH=./downloads
 ```
- 
+
+**Variáveis disponíveis:**
+- `EMAIL`: Seu email de login
+- `PASSWORD`: Sua senha  
+- `DEBUG_MODE`: Habilita modo de depuração (true/false)
+- `DOWNLOAD_BASE_PATH`: Pasta base para downloads (padrão: `./downloads`)
+
 3. Após tudo configurado, apenas faça
 ```
 python privacy_scraper.py
@@ -46,6 +53,16 @@ https://github.com/BtbN/FFmpeg-Builds/releases
 4. Clique em "Editar as variáveis de ambiente do sistema"
 5. Em "Variáveis do sistema", selecione Path > Editar > Novo
 6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
+
+## Docker
+Create image:
+```bash
+docker build -t privacy-scraper:local .
+```
+Run with minimum parameters:
+```bash
+docker run --rm -it -v ./cache:/home/appuser/.cache -v ./.env:/app/.env -v ./downloads:/app/downloads privacy-scraper:local
+```
  
 ## Contato
  

@@ -50,6 +50,9 @@ DOWNLOAD_CHUNK_SIZE = 64 * 1024
 MAX_WORKERS_MEDIA = 8
 MAX_WORKERS_HLS = 16
 
+# Download configuration
+DOWNLOAD_BASE_PATH = os.getenv('DOWNLOAD_BASE_PATH', './downloads')
+
 
 class TurnstileResolver:
     def __init__(self):
@@ -592,15 +595,17 @@ class MediaDownloader:
         file_url = file_data.get("url", "")
         media_id = self.ensure_media_id(file_data.get("mediaId"))
 
+        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+
         if file_type == "image" and media_type in ["1", "3"]:
-            filename = f"./{profile_name}/fotos/{media_id}.jpg"
+            filename = os.path.join(base_dir, "fotos", f"{media_id}.jpg")
             if os.path.exists(filename):
                 return ("photo", False)
             ok = self.download_image_with_fallback(file_url, filename)
             return ("photo", ok)
 
         if file_type == "video" and media_type in ["2", "3"]:
-            filename = f"./{profile_name}/videos/{media_id}.mp4"
+            filename = os.path.join(base_dir, "videos", f"{media_id}.mp4")
             if os.path.exists(filename):
                 return ("video", False)
             if '.mp4' in file_url:
@@ -635,8 +640,11 @@ class MediaDownloader:
         return items
 
     def _drain(self, iterator, profile_name, media_type, pbar, discover_label):
-        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
-        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
+        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+        fotos_dir = os.path.join(base_dir, "fotos")
+        videos_dir = os.path.join(base_dir, "videos")
+        os.makedirs(fotos_dir, exist_ok=True)
+        os.makedirs(videos_dir, exist_ok=True)
 
         items = self._discover(iterator, discover_label)
         if not items:
@@ -741,8 +749,11 @@ class MediaDownloader:
         )
 
     def download_all(self, profile_name, media_type="3", pbar=None):
-        os.makedirs(f"./{profile_name}/fotos", exist_ok=True)
-        os.makedirs(f"./{profile_name}/videos", exist_ok=True)
+        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+        fotos_dir = os.path.join(base_dir, "fotos")
+        videos_dir = os.path.join(base_dir, "videos")
+        os.makedirs(fotos_dir, exist_ok=True)
+        os.makedirs(videos_dir, exist_ok=True)
 
         total_media, _ = self.scraper.get_total_media_count(profile_name)
         items = []
