@@ -61,7 +61,7 @@ docker build -t privacy-scraper:local .
 ```
 Executar com parâmetros mínimos:
 ```bash
-docker run --rm -it -v ./cache:/home/appuser/.cache -v ./.env:/app/.env -v ./downloads:/app/downloads privacy-scraper:local
+docker run --rm -it -v ./cache:/home/appuser/.cache -v ./.env:/app/.env -v ./downloads:/app/downloads -v ./token_cache.json:/app/token_cache.json privacy-scraper:local
 ```
  
 ## Contato

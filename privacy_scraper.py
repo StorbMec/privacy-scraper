@@ -51,7 +51,6 @@ DOWNLOAD_CHUNK_SIZE = 64 * 1024
 MAX_WORKERS_MEDIA = 8
 MAX_WORKERS_HLS = 16
 
-# Download configuration
 DOWNLOAD_BASE_PATH = os.getenv('DOWNLOAD_BASE_PATH', './downloads')
 
 
@@ -568,6 +567,26 @@ class MediaDownloader:
             return str(uuid.uuid4())
         return media_id
 
+    def _sanitize_path_component(self, value, fallback="unknown"):
+        text = str(value or "").strip()
+        text = text.replace("/", "_").replace("\\", "_")
+        text = re.sub(r"\s+", "_", text)
+        text = re.sub(r"[^A-Za-z0-9._-]", "_", text)
+        text = text.strip("._-")
+        if not text:
+            return fallback
+        return text
+
+    def _get_profile_base_dir(self, profile_name):
+        download_root = os.path.abspath(DOWNLOAD_BASE_PATH)
+        safe_profile = self._sanitize_path_component(profile_name, "unknown-profile")
+        base_dir = os.path.abspath(os.path.join(download_root, safe_profile))
+
+        if os.path.commonpath([download_root, base_dir]) != download_root:
+            raise ValueError("Invalid profile_name path: resolved outside DOWNLOAD_BASE_PATH")
+
+        return base_dir
+
     def format_post_date(self, raw_date):
         if not raw_date:
             return "unknown-date"
@@ -622,7 +641,15 @@ class MediaDownloader:
             self.clean_temp_files(base_path)
 
     def _download_single_media(self, media_item, profile_name, media_type):
-        file_data = media_item.get("file", {})
+        if not isinstance(media_item, dict):
+            raise ValueError(f"Invalid media item shape: expected dict, got {type(media_item).__name__}")
+
+        file_data = media_item.get("file")
+        if file_data is None:
+            file_data = media_item
+        elif not isinstance(file_data, dict):
+            raise ValueError("Invalid media item shape: 'file' must be a dict")
+
         if file_data.get("isLocked", True):
             return (None, False)
 
@@ -633,7 +660,7 @@ class MediaDownloader:
         post_date = media_item.get("post_date")
         media_stem = self.build_media_stem(post_date, post_id, media_id)
 
-        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+        base_dir = self._get_profile_base_dir(profile_name)
 
         if file_type == "image" and media_type in ["1", "3"]:
             filename = os.path.join(base_dir, "fotos", f"{media_stem}.jpg")
@@ -678,7 +705,7 @@ class MediaDownloader:
         return items
 
     def _drain(self, iterator, profile_name, media_type, pbar, discover_label):
-        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+        base_dir = self._get_profile_base_dir(profile_name)
         fotos_dir = os.path.join(base_dir, "fotos")
         videos_dir = os.path.join(base_dir, "videos")
         os.makedirs(fotos_dir, exist_ok=True)
@@ -799,7 +826,7 @@ class MediaDownloader:
         )
 
     def download_all(self, profile_name, media_type="3", pbar=None):
-        base_dir = os.path.join(DOWNLOAD_BASE_PATH, profile_name)
+        base_dir = self._get_profile_base_dir(profile_name)
         fotos_dir = os.path.join(base_dir, "fotos")
         videos_dir = os.path.join(base_dir, "videos")
         os.makedirs(fotos_dir, exist_ok=True)
