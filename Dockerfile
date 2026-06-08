@@ -29,7 +29,7 @@ ENV USER_GID=${USER_GID}
 
 RUN groupadd --gid ${USER_GID} ${USERNAME} && \
     useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME}
-	
+
 WORKDIR /app
 
 COPY --from=compiler /opt/venv /opt/venv

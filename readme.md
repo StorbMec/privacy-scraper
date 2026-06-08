@@ -63,7 +63,9 @@ Executar com parâmetros mínimos:
 ```bash
 docker run --rm -it -v ./cache:/home/appuser/.cache -v ./.env:/app/.env -v ./downloads:/app/downloads -v ./token_cache.json:/app/token_cache.json privacy-scraper:local
 ```
- 
+**IMPORTANTE**: 
+- Os diretórios "cache" e "downloads" precisam ser criados.
+- O arquivo ".env" precisa ser criado e preenchido com os parâmetros de ambiente.
 ## Contato
  
 Discord: st8rb
