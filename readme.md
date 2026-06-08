@@ -55,11 +55,11 @@ https://github.com/BtbN/FFmpeg-Builds/releases
 6. Adicione o caminho da pasta bin do FFmpeg (ex: C:\ffmpeg\bin)
 
 ## Docker
-Create image:
+Criar imagem:
 ```bash
 docker build -t privacy-scraper:local .
 ```
-Run with minimum parameters:
+Executar com parâmetros mínimos:
 ```bash
 docker run --rm -it -v ./cache:/home/appuser/.cache -v ./.env:/app/.env -v ./downloads:/app/downloads privacy-scraper:local
 ```

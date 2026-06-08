@@ -18,7 +18,8 @@ FROM python:3.14-trixie AS runner
 
 RUN \
     apt update && \
-    apt install ffmpeg -y
+    apt install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -36,7 +37,7 @@ COPY --from=compiler /opt/venv /opt/venv
 
 COPY privacy_scraper.py .
 
-RUN chown -R ${USER_GID}:${USER_GID} /app
+RUN chown -R ${USER_UID}:${USER_GID} /app
 
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
