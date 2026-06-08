@@ -51,7 +51,7 @@ DOWNLOAD_CHUNK_SIZE = 64 * 1024
 MAX_WORKERS_MEDIA = 8
 MAX_WORKERS_HLS = 16
 
-DOWNLOAD_BASE_PATH = os.getenv('DOWNLOAD_BASE_PATH', './downloads')
+DOWNLOAD_BASE_PATH = os.path.abspath(os.path.expanduser(os.getenv('DOWNLOAD_BASE_PATH', './downloads')))
 
 
 class TurnstileResolver:
