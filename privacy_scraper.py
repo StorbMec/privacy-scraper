@@ -221,11 +221,10 @@ class PrivacyScraper:
             headers={
                 "Host": "privacy.com.br",
                 "Referer": "https://privacy.com.br/auth?route=sign-in",
+                "Accept": "application/json, text/plain, */*",
                 "Sec-Fetch-Site": "same-origin",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "empty",
             },
             impersonate="chrome120"
         )
