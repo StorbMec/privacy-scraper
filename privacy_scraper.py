@@ -214,25 +214,47 @@ class PrivacyScraper:
     def _apply_tokens(self, token_v1, token_v2):
         self.token_v1 = token_v1
         self.token_v2 = token_v2
+        if "__cf_bm" not in self.session.cookies.get_dict():
+            self.session.get("https://privacy.com.br/", impersonate="chrome120")
         response = self.session.get(
             f"https://privacy.com.br/strangler/Authorize?TokenV1={token_v1}&TokenV2={token_v2}",
-            headers={"Host": "privacy.com.br", "Referer": "https://privacy.com.br/auth?route=sign-in"},
+            headers={
+                "Host": "privacy.com.br",
+                "Referer": "https://privacy.com.br/auth?route=sign-in",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            },
             impersonate="chrome120"
         )
         return response.status_code == 200
 
-    def _do_login_request(self, turnstile_token):
+    def _response_needs_captcha(self, response):
+        try:
+            data = response.json()
+        except Exception:
+            return False
+        blob = json.dumps(data).lower()
+        return "captcha" in blob or "turnstile" in blob
+
+    def _do_login_request(self, turnstile_token=None):
+        payload = {
+            "Email": self.email,
+            "Document": None,
+            "Password": self.password,
+            "Locale": "pt-BR",
+            "CanReceiveEmail": True,
+            "ProfileName": ""
+        }
+        if turnstile_token:
+            payload["TurnstileToken"] = turnstile_token
+            payload["TurnstileMode"] = "invisible"
+
         response = self.session.post(
             "https://service.privacy.com.br/auth/login",
-            json={
-                "Email": self.email,
-                "Document": None,
-                "Password": self.password,
-                "Locale": "pt-BR",
-                "CanReceiveEmail": True,
-                "TurnstileToken": turnstile_token,
-                "TurnstileMode": "invisible"
-            },
+            data=json.dumps(payload),
             headers={
                 'Host': 'service.privacy.com.br',
                 'Accept': 'application/json, text/plain, */*',
@@ -252,6 +274,22 @@ class PrivacyScraper:
                 self.token_expires_at = expires_at
                 self.cache.set_token(self.email, t1, t2, expires_at)
                 return True
+            return False
+
+        if self._response_needs_captcha(response):
+            return "captcha_required"
+        return False
+
+    def _login_with_captcha_fallback(self):
+        result = self._do_login_request()
+        if result is True:
+            return True
+        if result == "captcha_required":
+            tqdm.write("Servidor exigiu captcha, resolvendo...")
+            turnstile_token = self.turnstile.resolve()
+            if not turnstile_token:
+                return False
+            return self._do_login_request(turnstile_token) is True
         return False
 
     def login(self):
@@ -261,11 +299,7 @@ class PrivacyScraper:
                 self.token_expires_at = cached.get("expires_at")
                 return True
 
-        turnstile_token = self.turnstile.resolve()
-        if not turnstile_token:
-            return False
-
-        return self._do_login_request(turnstile_token)
+        return self._login_with_captcha_fallback()
 
     def refresh_token_if_needed(self):
         if not self.token_expires_at:
@@ -278,8 +312,7 @@ class PrivacyScraper:
                 return
             tqdm.write("\nToken próximo de expirar, renovando...")
             self.cache.clear()
-            turnstile_token = self.turnstile.resolve()
-            if turnstile_token and self._do_login_request(turnstile_token):
+            if self._login_with_captcha_fallback():
                 tqdm.write("Token renovado com sucesso!")
             else:
                 tqdm.write(f"{RED}Falha ao renovar token!{RESET}")
