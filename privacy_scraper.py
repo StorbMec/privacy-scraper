@@ -6,9 +6,11 @@ import urllib.parse
 import shutil
 import uuid
 import base64
+import hashlib
 import threading
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from tqdm import tqdm
 from curl_cffi import requests as cffi_requests
@@ -382,6 +384,76 @@ class PrivacyScraper:
         )
         return response.json() if response.status_code == 200 else None
 
+    def get_chat_rooms(self):
+        if not self.token_v2:
+            return []
+        response = self.session.get(
+            "https://service.privacy.com.br/chat/rooms",
+            headers={
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
+            impersonate="chrome120"
+        )
+        return response.json().get("rooms", []) if response.status_code == 200 else []
+
+    def get_room_id_for_profile(self, profile_name):
+        for room in self.get_chat_rooms():
+            if room.get("recipient", {}).get("profileName") == profile_name:
+                return room.get("roomId")
+        return None
+
+    def get_chat_medias(self, room_id, cursor=None, media_filter="video"):
+        if not self.token_v2:
+            return None
+        params = {"roomId": room_id, "filter": media_filter}
+        if cursor:
+            params["minorSentAt"] = cursor
+        response = self.session.get(
+            "https://service.privacy.com.br/chat/medias",
+            params=params,
+            headers={
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
+            impersonate="chrome120"
+        )
+        return response.json().get("items") if response.status_code == 200 else None
+
+    def resolve_media_url(self, media_id, media_type):
+        if not self.token_v2:
+            return None
+        kind = "video" if media_type == "video" else "image"
+        response = self.session.get(
+            f"https://service.privacy.com.br/media/{kind}/{media_id}",
+            headers={
+                "authorization": f"Bearer {self.token_v2}",
+                "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "Origin": "https://privacy.com.br",
+                "Referer": "https://privacy.com.br/",
+            },
+            allow_redirects=False,
+            impersonate="chrome120"
+        )
+        if response.status_code in (301, 302, 303, 307, 308):
+            location = response.headers.get("location")
+            if location:
+                return location
+        body = (response.text or "").strip()
+        if body.startswith("http"):
+            return body
+        return None
+
     def get_video_token(self, file_id):
         if not self.token_v2:
             return None
@@ -586,10 +658,25 @@ class MediaDownloader:
             return url.split('/hls/', 1)[0].split('/')[-1]
         return None
 
-    def ensure_media_id(self, media_id):
-        if not media_id or media_id == "undefined":
-            return str(uuid.uuid4())
-        return media_id
+    def _media_unlocked(self, file_data):
+        locked = file_data.get("isLocked")
+        if locked is True:
+            return False
+        if locked is False:
+            return True
+        media_id = file_data.get("mediaId")
+        return bool(file_data.get("url") or (media_id and media_id != "undefined"))
+
+    def _stable_media_id(self, file_data, file_url):
+        media_id = file_data.get("mediaId")
+        if media_id and media_id != "undefined":
+            return media_id
+        file_id = self.extract_file_id_from_url(file_url) if file_url else None
+        if file_id:
+            return file_id
+        if file_url:
+            return hashlib.sha1(file_url.encode("utf-8")).hexdigest()[:16]
+        return str(uuid.uuid4())
 
     def _download_hls_video(self, file_url, filename):
         file_id = self.extract_file_id_from_url(file_url)
@@ -613,11 +700,17 @@ class MediaDownloader:
             self.clean_temp_files(base_path)
 
     def _download_single_media(self, file_data, profile_name, media_type):
-        if file_data.get("isLocked", True):
+        if not self._media_unlocked(file_data):
             return (None, False)
         file_type = file_data.get("type", "")
         file_url = file_data.get("url", "")
-        media_id = self.ensure_media_id(file_data.get("mediaId"))
+        raw_media_id = file_data.get("mediaId")
+        if not file_url and raw_media_id and raw_media_id != "undefined":
+            self.scraper.refresh_token_if_needed()
+            file_url = self.scraper.resolve_media_url(raw_media_id, file_type) or ""
+        if not file_url:
+            return (None, False)
+        media_id = self._stable_media_id(file_data, file_url)
 
         if file_type == "image" and media_type in ["1", "3"]:
             filename = f"./{profile_name}/fotos/{media_id}.jpg"
@@ -640,7 +733,7 @@ class MediaDownloader:
 
     def _collect_eligible(self, files, media_type):
         for f in files:
-            if f.get("isLocked", True):
+            if not self._media_unlocked(f):
                 continue
             ft = f.get("type", "")
             if ft == "image" and media_type in ["1", "3"]:
@@ -725,7 +818,55 @@ class MediaDownloader:
                 break
             offset += limit
 
+    def _shift_cursor_back(self, cursor, days=32):
+        try:
+            dt = datetime.fromisoformat(cursor.replace("Z", "+00:00")) - timedelta(days=days)
+            return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        except Exception:
+            return None
+
+    def _crawl_room_medias(self, room_id, media_filter):
+        seen = {}
+        for _ in range(3):
+            before = len(seen)
+            cursor = None
+            idle = 0
+            while idle < 8:
+                self.scraper.refresh_token_if_needed()
+                items = self.scraper.get_chat_medias(room_id, cursor, media_filter) or []
+                sents = [it.get("sentAt") for it in items if it.get("sentAt")]
+                for it in items:
+                    if it.get("_id"):
+                        seen.setdefault(it["_id"], it)
+                if sents:
+                    oldest = min(sents)
+                    if cursor is None or oldest < cursor:
+                        cursor = oldest
+                        idle = 0
+                        continue
+                idle += 1
+                if not cursor:
+                    break
+                cursor = self._shift_cursor_back(cursor)
+                if not cursor:
+                    break
+            if len(seen) == before:
+                break
+        return list(seen.values())
+
     def _iter_chat_media(self, profile_name, media_type):
+        media_filter = {"1": "image", "2": "video"}.get(media_type, "all")
+        seen_messages = set()
+
+        room_id = self.scraper.get_room_id_for_profile(profile_name)
+        if room_id:
+            filters = ["video", "image"] if media_type == "3" else [media_filter]
+            for f in filters:
+                for msg in self._crawl_room_medias(room_id, f):
+                    if msg.get("_id"):
+                        seen_messages.add(msg["_id"])
+                    yield from self._collect_eligible(msg.get("files") or [], media_type)
+
         offset, limit = 0, 20
         while True:
             self.scraper.refresh_token_if_needed()
@@ -734,6 +875,9 @@ class MediaDownloader:
                 break
             for chat in media_data["items"]:
                 if chat.get("creator", {}).get("profileName") != profile_name:
+                    continue
+                msg_id = chat.get("messageId") or chat.get("_id")
+                if msg_id and msg_id in seen_messages:
                     continue
                 files = chat.get("files") or chat.get("medias") or []
                 yield from self._collect_eligible(files, media_type)
