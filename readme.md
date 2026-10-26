@@ -3,6 +3,12 @@ Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automati
  
 ## Updates
  
+**26/10/2026**
+- Adicionada opção para baixar um post específico (ao invés do perfil inteiro), com lista mostrando data, legenda e quantidade de fotos/vídeos de cada post
+- Possível selecionar múltiplos posts de uma vez (ex: `1,3,5-7` ou `todos`)
+- Itens ainda bloqueados (não comprados) não aparecem mais na lista
+- Busca de itens otimizada com paralelização (mais rápida)
+
 **23/04/2026**
 - Aumentado velocidade dos downloads com paralelização
 
@@ -35,6 +41,12 @@ python privacy_scraper.py
 4. Quando aparecer a lista de perfis, aperta o numero do perfil escolhido ou 0 para sair.
  
 5. Depois selecione o tipo de midia, aperte o numero de mídia para download (1 - Fotos, 2 - Vídeos, 3 - Ambos).
+ 
+6. No menu do perfil, a opção **5 - Escolher um item específico para baixar** permite baixar só alguns posts em vez do perfil inteiro:
+   - Escolha a origem (Perfil, Compradas ou Chat) e o tipo de mídia
+   - É mostrada uma lista com data, legenda e quantidade de fotos/vídeos de cada post (itens bloqueados/não comprados não aparecem)
+   - Digite o(s) número(s) do post (ex: `3`, `1,3,5-7` ou `todos`) para baixar
+   - `U` permite colar uma URL de vídeo (.mp4/.m3u8) ou um `mediaId` diretamente, sem precisar da lista
  
 ## Dependencias (FFmpeg)
  

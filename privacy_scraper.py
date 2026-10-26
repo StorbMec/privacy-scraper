@@ -731,6 +731,143 @@ class MediaDownloader:
 
         return (None, False)
 
+    def download_single_video(self, profile_name, source):
+        source = source.strip()
+        if source.startswith("http"):
+            file_url = source
+            raw_media_id = None
+        else:
+            raw_media_id = source
+            self.scraper.refresh_token_if_needed()
+            file_url = self.scraper.resolve_media_url(raw_media_id, "video") or ""
+
+        if not file_url:
+            return False, None
+
+        media_id = self._stable_media_id({"mediaId": raw_media_id}, file_url)
+        filename = f"./{profile_name}/videos/{media_id}.mp4"
+        if os.path.exists(filename):
+            return True, filename
+
+        if '.mp4' in file_url:
+            ok = self.download_file(file_url, filename, is_video=True)
+        else:
+            ok = self._download_hls_video(file_url, filename)
+        return ok, filename
+
+    def _post_date(self, post):
+        for key in ("createdAt", "postedAt", "publishedAt", "sentAt", "date"):
+            v = post.get(key)
+            if v:
+                return v
+        return None
+
+    def _post_caption(self, post):
+        for key in ("text", "caption", "title", "description"):
+            v = post.get(key)
+            if v:
+                return v
+        return None
+
+    def _format_date(self, raw):
+        if not raw:
+            return "data desconhecida"
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return dt.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return str(raw)
+
+    def _fetch_all_pages(self, fetch_page, page_size=20, max_parallel=8):
+        all_items = []
+        offset = 0
+        done = False
+        while not done:
+            batch_offsets = [offset + i * page_size for i in range(max_parallel)]
+            pages = {}
+            with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+                futures = {pool.submit(fetch_page, off, page_size): off for off in batch_offsets}
+                for fut in as_completed(futures):
+                    off = futures[fut]
+                    try:
+                        pages[off] = fut.result() or []
+                    except Exception:
+                        pages[off] = []
+            for off in batch_offsets:
+                page = pages.get(off, [])
+                all_items.extend(page)
+                if len(page) < page_size:
+                    done = True
+                    break
+            offset += max_parallel * page_size
+        return all_items
+
+    def list_items(self, profile_name, source, media_type):
+        type_filters = {"1": ["image"], "2": ["video"], "3": ["image", "video"]}[media_type]
+        results = []
+        lock = threading.Lock()
+
+        def add_from_post(post, files):
+            eligible = [
+                f for f in files
+                if f.get("type", "") in type_filters and self._media_unlocked(f)
+            ]
+            if not eligible:
+                return
+            date_raw = self._post_date(post)
+            entry = {
+                "date_raw": date_raw or "",
+                "date": self._format_date(date_raw),
+                "caption": self._post_caption(post),
+                "price": post.get("price"),
+                "photos": sum(1 for f in eligible if f.get("type") == "image"),
+                "videos": sum(1 for f in eligible if f.get("type") == "video"),
+                "files": eligible,
+            }
+            with lock:
+                results.append(entry)
+
+        if source == "profile":
+            def fetch_page(offset, page_size):
+                self.scraper.refresh_token_if_needed()
+                data = self.scraper.get_profile_posts(profile_name, offset, page_size)
+                return (data or {}).get("items") or []
+
+            for post in self._fetch_all_pages(fetch_page):
+                add_from_post(post, post.get("medias", []))
+
+        elif source == "purchased":
+            def fetch_page(offset, page_size):
+                self.scraper.refresh_token_if_needed()
+                data = self.scraper.get_purchased_media(offset, page_size)
+                return (data or {}).get("items") or []
+
+            for post in self._fetch_all_pages(fetch_page):
+                if post.get("creator", {}).get("profileName") != profile_name:
+                    continue
+                add_from_post(post, post.get("medias", []))
+
+        elif source == "chat":
+            room_id = self.scraper.get_room_id_for_profile(profile_name)
+            msgs, seen_ids = [], set()
+            if room_id:
+                filters = ["video", "image"] if media_type == "3" else [{"1": "image", "2": "video"}[media_type]]
+                with ThreadPoolExecutor(max_workers=len(filters)) as pool:
+                    crawl_results = list(pool.map(lambda f: self._crawl_room_medias(room_id, f), filters))
+                for crawled in crawl_results:
+                    for msg in crawled:
+                        msg_id = msg.get("_id")
+                        if msg_id and msg_id in seen_ids:
+                            continue
+                        if msg_id:
+                            seen_ids.add(msg_id)
+                        msgs.append(msg)
+            for msg in msgs:
+                add_from_post(msg, msg.get("files") or [])
+
+        results.sort(key=lambda it: it["date_raw"], reverse=True)
+        return results
+
     def _collect_eligible(self, files, media_type):
         for f in files:
             if not self._media_unlocked(f):
@@ -960,6 +1097,36 @@ def select_media_type():
         print("Erro: Opção inválida! Digite apenas 1, 2 ou 3")
 
 
+def parse_selection(raw, max_n):
+    indices = set()
+    invalid = []
+    for part in raw.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part[1:]:
+            a_str, _, b_str = part.partition("-")
+            if a_str.isdigit() and b_str.isdigit():
+                a, b = int(a_str), int(b_str)
+                if a > b:
+                    a, b = b, a
+                for n in range(a, b + 1):
+                    if 1 <= n <= max_n:
+                        indices.add(n)
+                    else:
+                        invalid.append(str(n))
+                continue
+            invalid.append(part)
+        elif part.isdigit():
+            n = int(part)
+            if 1 <= n <= max_n:
+                indices.add(n)
+            else:
+                invalid.append(part)
+        else:
+            invalid.append(part)
+    return sorted(indices), invalid
+
+
 def ask_int(prompt, default, min_value=1, max_value=64):
     while True:
         raw = input(f"{prompt} [padrão {default}]: ").strip()
@@ -1021,13 +1188,118 @@ def main():
             print("2 - Baixar mídias compradas")
             print("3 - Baixar mídias do chat")
             print("4 - Baixar tudo")
+            print("5 - Escolher um item específico para baixar")
             print("0 - Voltar para seleção de perfil")
             action = input("Selecione uma ação: ")
 
             if action == "0":
                 break
-            if action not in ["1", "2", "3", "4"]:
+            if action not in ["1", "2", "3", "4", "5"]:
                 print("Opção inválida!")
+                continue
+
+            if action == "5":
+                print("De onde buscar? 1 - Perfil | 2 - Compradas | 3 - Chat")
+                src_choice = input("Selecione a origem: ").strip()
+                source = {"1": "profile", "2": "purchased", "3": "chat"}.get(src_choice)
+                if not source:
+                    print("Opção inválida!")
+                    continue
+
+                list_media_type = select_media_type()
+                downloader = MediaDownloader(scraper.session, scraper, 1, last_workers_hls)
+
+                print(f"{GREEN}Buscando itens (desbloqueados)...{RESET}")
+                items = downloader.list_items(profile_name, source, list_media_type)
+                if not items:
+                    print("Nenhum item desbloqueado encontrado.")
+                    continue
+
+                print(f"\n=== POSTS ({nickname}) — {len(items)} com mídia desbloqueada ===")
+                for i, it in enumerate(items, start=1):
+                    parts = []
+                    if it["photos"]:
+                        parts.append(f"{it['photos']} foto" + ("s" if it["photos"] != 1 else ""))
+                    if it["videos"]:
+                        parts.append(f"{it['videos']} vídeo" + ("s" if it["videos"] != 1 else ""))
+                    tipo = " + ".join(parts)
+                    if it["caption"]:
+                        legenda = it["caption"][:60]
+                    elif it["price"]:
+                        legenda = f"R$ {it['price']}"
+                    else:
+                        legenda = "sem legenda"
+                    print(f"{i} - [{tipo}] {it['date']} - {legenda}")
+
+                print("0 - Cancelar | U - Colar URL/mediaId manualmente | TODOS - baixar tudo")
+                choice = input("Selecione o(s) número(s) (ex: 1,3,5-7): ").strip().lower()
+
+                if choice == "0":
+                    continue
+                if choice == "u":
+                    source_manual = input("Cole a URL do vídeo (.mp4/.m3u8) ou o mediaId: ").strip()
+                    if not source_manual:
+                        print("Erro: valor vazio.")
+                        continue
+                    ok, filename = downloader.download_single_video(profile_name, source_manual)
+                    if ok:
+                        tqdm.write(f"{GREEN}Vídeo salvo em {filename}{RESET}")
+                    else:
+                        tqdm.write(f"{RED}Falha ao baixar o vídeo. Verifique a URL/mediaId.{RESET}")
+                    continue
+
+                if choice in ("todos", "all", "*"):
+                    selected = list(range(1, len(items) + 1))
+                else:
+                    selected, invalid = parse_selection(choice, len(items))
+                    if invalid:
+                        print(f"{RED}Ignorado(s), inválido(s): {', '.join(invalid)}{RESET}")
+                    if not selected:
+                        print("Nenhum número válido selecionado.")
+                        continue
+
+                chosen_posts = [items[i - 1] for i in selected]
+                file_tasks = [f for post in chosen_posts for f in post["files"]]
+
+                if len(file_tasks) == 1:
+                    print(f"{GREEN}Baixando...{RESET}")
+                    kind, ok = downloader._download_single_media(file_tasks[0], profile_name, list_media_type)
+                    if ok:
+                        tqdm.write(f"{GREEN}Download concluído!{RESET}")
+                    else:
+                        tqdm.write(f"{RED}Falha ao baixar o item.{RESET}")
+                    continue
+
+                workers_media = ask_int(
+                    "Threads para downloads em paralelo?",
+                    last_workers_media, 1, 64
+                )
+                workers_hls = ask_int(
+                    "Threads para segmentos HLS (dentro de cada vídeo HLS)?",
+                    last_workers_hls, 1, 64
+                )
+                last_workers_media, last_workers_hls = workers_media, workers_hls
+                downloader = MediaDownloader(scraper.session, scraper, workers_media, workers_hls)
+
+                def task(f):
+                    try:
+                        return downloader._download_single_media(f, profile_name, list_media_type)
+                    except Exception as e:
+                        tqdm.write(f"{RED}Erro no download: {e}{RESET}")
+                        return (None, False)
+
+                photos, videos = 0, 0
+                with tqdm(total=len(file_tasks), desc=f"Download {nickname}", bar_format=TQDM_FORMAT) as pbar:
+                    with ThreadPoolExecutor(max_workers=workers_media) as pool:
+                        futures = [pool.submit(task, f) for f in file_tasks]
+                        for fut in as_completed(futures):
+                            kind, ok = fut.result()
+                            pbar.update(1)
+                            if ok and kind == "photo":
+                                photos += 1
+                            elif ok and kind == "video":
+                                videos += 1
+                tqdm.write(f"Download concluído! Fotos: {photos}, Vídeos: {videos}")
                 continue
 
             media_type = select_media_type()
