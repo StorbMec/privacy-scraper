@@ -5,9 +5,7 @@ Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automati
  
 **26/10/2026**
 - Adicionada opção para baixar um post específico (ao invés do perfil inteiro), com lista mostrando data, legenda e quantidade de fotos/vídeos de cada post
-- Possível selecionar múltiplos posts de uma vez (ex: `1,3,5-7` ou `todos`)
-- Itens ainda bloqueados (não comprados) não aparecem mais na lista
-- Busca de itens otimizada com paralelização (mais rápida)
+- Ajuste nas midias baixadas no chat
 
 **23/04/2026**
 - Aumentado velocidade dos downloads com paralelização
