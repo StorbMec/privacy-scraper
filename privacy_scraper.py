@@ -246,14 +246,19 @@ class PrivacyScraper:
             "Password": self.password,
             "Locale": "pt-BR",
             "CanReceiveEmail": True,
-            "ProfileName": ""
+            "ProfileName": "",
+            "ClientSignals": {
+                "Screen": "1920x1080@1",
+                "WebglVendor": "Google Inc. (Google)",
+                "WebglRenderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+            }
         }
         if turnstile_token:
             payload["TurnstileToken"] = turnstile_token
             payload["TurnstileMode"] = "invisible"
 
         response = self.session.post(
-            "https://service.privacy.com.br/auth/login",
+            "https://service.privacy.com.br/auth/identity/login",
             data=json.dumps(payload),
             headers={
                 'Host': 'service.privacy.com.br',
