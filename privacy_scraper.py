@@ -404,11 +404,12 @@ class PrivacyScraper:
         )
         return response.json() if response.status_code == 200 else None
 
-    def get_chat_rooms(self):
+    def get_chat_rooms(self, page=1):
         if not self.token_v2:
             return []
         response = self.session.get(
             "https://service.privacy.com.br/chat/rooms",
+            params={"page": page, "filter": "all", "sort": "newest", "online": "false"},
             headers={
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
@@ -421,8 +422,19 @@ class PrivacyScraper:
         )
         return response.json().get("rooms", []) if response.status_code == 200 else []
 
+    def get_all_chat_rooms(self, max_pages=20):
+        all_rooms = []
+        page = 1
+        while page <= max_pages:
+            rooms = self.get_chat_rooms(page)
+            if not rooms:
+                break
+            all_rooms.extend(rooms)
+            page += 1
+        return all_rooms
+
     def get_room_id_for_profile(self, profile_name):
-        for room in self.get_chat_rooms():
+        for room in self.get_all_chat_rooms():
             if room.get("recipient", {}).get("profileName") == profile_name:
                 return room.get("roomId")
         return None
@@ -478,14 +490,26 @@ class PrivacyScraper:
         if not self.token_v2:
             return None
         response = self.session.post(
-            "https://service.privacy.com.br/media/video/token",
-            json={"file_id": file_id, "exp": 3600},
+            "https://service.privacy.com.br/mediavideotoken/generate",
+            json={"file_id": file_id},
             headers={
                 "Host": "service.privacy.com.br",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "pt-BR,pt;q=0.5",
                 "Authorization": f"Bearer {self.token_v2}",
+                "Cache-Control": "no-cache",
                 "Content-Type": "application/json",
                 "Origin": "https://privacy.com.br",
+                "Pragma": "no-cache",
+                "Priority": "u=1, i",
                 "Referer": "https://privacy.com.br/",
+                "Sec-CH-UA": '"Not-A.Brand";v="99", "Chromium";v="135", "Google Chrome";v="135"',
+                "Sec-CH-UA-Mobile": "?0",
+                "Sec-CH-UA-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-site",
+                "Sec-GPC": "1",
             },
             impersonate="chrome120"
         )
@@ -551,8 +575,10 @@ class MediaDownloader:
                     "content": token_data['content'],
                     "sec-ch-ua-mobile": "?0",
                     "Accept": "*/*",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
                     "Sec-GPC": "1",
-                    "Accept-Language": "pt-BR,pt;q=0.6",
+                    "Accept-Language": "pt-BR,pt;q=0.5",
                     "Origin": "https://privacy.com.br",
                     "Sec-Fetch-Site": "same-site",
                     "Sec-Fetch-Mode": "cors",
@@ -873,7 +899,7 @@ class MediaDownloader:
             if room_id:
                 filters = ["video", "image"] if media_type == "3" else [{"1": "image", "2": "video"}[media_type]]
                 with ThreadPoolExecutor(max_workers=len(filters)) as pool:
-                    crawl_results = list(pool.map(lambda f: self._crawl_room_medias(room_id, f), filters))
+                    crawl_results = list(pool.map(lambda f: list(self._crawl_room_medias(room_id, f)), filters))
                 for crawled in crawl_results:
                     for msg in crawled:
                         msg_id = msg.get("_id")
@@ -983,9 +1009,9 @@ class MediaDownloader:
             return None
 
     def _crawl_room_medias(self, room_id, media_filter):
-        seen = {}
+        seen_ids = set()
         for _ in range(3):
-            before = len(seen)
+            found_this_pass = 0
             cursor = None
             idle = 0
             while idle < 8:
@@ -993,8 +1019,11 @@ class MediaDownloader:
                 items = self.scraper.get_chat_medias(room_id, cursor, media_filter) or []
                 sents = [it.get("sentAt") for it in items if it.get("sentAt")]
                 for it in items:
-                    if it.get("_id"):
-                        seen.setdefault(it["_id"], it)
+                    it_id = it.get("_id")
+                    if it_id and it_id not in seen_ids:
+                        seen_ids.add(it_id)
+                        found_this_pass += 1
+                        yield it
                 if sents:
                     oldest = min(sents)
                     if cursor is None or oldest < cursor:
@@ -1007,9 +1036,8 @@ class MediaDownloader:
                 cursor = self._shift_cursor_back(cursor)
                 if not cursor:
                     break
-            if len(seen) == before:
+            if found_this_pass == 0:
                 break
-        return list(seen.values())
 
     def _iter_chat_media(self, profile_name, media_type):
         media_filter = {"1": "image", "2": "video"}.get(media_type, "all")
