@@ -218,7 +218,8 @@ class PrivacyScraper:
         if "__cf_bm" not in self.session.cookies.get_dict():
             self.session.get("https://privacy.com.br/", impersonate="chrome120")
         response = self.session.get(
-            f"https://privacy.com.br/strangler/Authorize?TokenV1={token_v1}&TokenV2={token_v2}",
+            "https://privacy.com.br/strangler/Authorize",
+            params={"TokenV2": token_v2, "ReturnUrl": "/"},
             headers={
                 "Host": "privacy.com.br",
                 "Referer": "https://privacy.com.br/auth?route=sign-in",
@@ -240,6 +241,9 @@ class PrivacyScraper:
         return "captcha" in blob or "turnstile" in blob
 
     def _do_login_request(self, turnstile_token=None):
+        if "__cf_bm" not in self.session.cookies.get_dict():
+            self.session.get("https://privacy.com.br/", impersonate="chrome120")
+
         payload = {
             "Email": self.email,
             "Document": None,
@@ -263,8 +267,18 @@ class PrivacyScraper:
             headers={
                 'Host': 'service.privacy.com.br',
                 'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'pt-BR',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Priority': 'u=1, i',
                 'Content-Type': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                'Sec-CH-UA': '"Not-A.Brand";v="99", "Chromium";v="135", "Google Chrome";v="135"',
+                'Sec-CH-UA-Mobile': '?0',
+                'Sec-CH-UA-Platform': '"Windows"',
+                'Sec-Fetch-Site': 'same-site',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Dest': 'empty',
                 'Sec-GPC': '1',
                 'Origin': 'https://privacy.com.br',
                 'Referer': 'https://privacy.com.br/',
@@ -273,7 +287,8 @@ class PrivacyScraper:
         )
         if response.status_code == 200:
             tokens = response.json()
-            t1, t2 = tokens.get("tokenV1"), tokens.get("token")
+            t2 = tokens.get("token")
+            t1 = tokens.get("tokenV1") or t2
             if self._apply_tokens(t1, t2):
                 expires_at = self._decode_token_expiry(t2) or (int(time.time()) + 3600)
                 self.token_expires_at = expires_at
