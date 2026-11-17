@@ -1,4 +1,7 @@
 # Privacy Scraper
+
+![Login Status](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/StorbMec/3da72f383b20dc15c9acd639366fc700/raw/status.json)
+
 Apenas baixa conteúdo de perfis no qual você ja é assinante de forma automatica :)
  
 ## Updates
