@@ -94,7 +94,7 @@ class TurnstileResolver:
             print(f"\rResolvendo captcha... {msg}")
 
         try:
-            response = cffi_requests.get(self.turnstile_html_url, impersonate="chrome120")
+            response = cffi_requests.get(self.turnstile_html_url, impersonate="chrome142")
             if response.status_code != 200:
                 stop_anim("Falha ao baixar HTML")
                 return None
@@ -216,7 +216,7 @@ class PrivacyScraper:
         self.token_v1 = token_v1
         self.token_v2 = token_v2
         if "__cf_bm" not in self.session.cookies.get_dict():
-            self.session.get("https://privacy.com.br/", impersonate="chrome120")
+            self.session.get("https://privacy.com.br/", impersonate="chrome142")
         response = self.session.get(
             "https://privacy.com.br/strangler/Authorize",
             params={"TokenV2": token_v2, "ReturnUrl": "/"},
@@ -228,7 +228,7 @@ class PrivacyScraper:
                 "Sec-Fetch-Mode": "cors",
                 "Sec-Fetch-Dest": "empty",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.status_code == 200
 
@@ -242,7 +242,7 @@ class PrivacyScraper:
 
     def _do_login_request(self, turnstile_token=None):
         if "__cf_bm" not in self.session.cookies.get_dict():
-            self.session.get("https://privacy.com.br/", impersonate="chrome120")
+            self.session.get("https://privacy.com.br/", impersonate="chrome142")
 
         payload = {
             "Email": self.email,
@@ -272,8 +272,8 @@ class PrivacyScraper:
                 'Pragma': 'no-cache',
                 'Priority': 'u=1, i',
                 'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-                'Sec-CH-UA': '"Not-A.Brand";v="99", "Chromium";v="135", "Google Chrome";v="135"',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+                'Sec-CH-UA': '"Not-A.Brand";v="99", "Chromium";v="142", "Google Chrome";v="142"',
                 'Sec-CH-UA-Mobile': '?0',
                 'Sec-CH-UA-Platform': '"Windows"',
                 'Sec-Fetch-Site': 'same-site',
@@ -283,7 +283,7 @@ class PrivacyScraper:
                 'Origin': 'https://privacy.com.br',
                 'Referer': 'https://privacy.com.br/',
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         if response.status_code == 200:
             tokens = response.json()
@@ -344,7 +344,7 @@ class PrivacyScraper:
         response = self.session.get(
             "https://service.privacy.com.br/profile/UserFollowing?page=0&limit=999&nickName=",
             headers={"authorization": f"Bearer {self.token_v2}"},
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         if response.status_code == 200:
             return [
@@ -362,11 +362,11 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json() if response.status_code == 200 else None
 
@@ -379,11 +379,11 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json() if response.status_code == 200 else None
 
@@ -396,11 +396,11 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json() if response.status_code == 200 else None
 
@@ -414,11 +414,11 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json().get("rooms", []) if response.status_code == 200 else []
 
@@ -452,11 +452,11 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json().get("items") if response.status_code == 200 else None
 
@@ -470,12 +470,12 @@ class PrivacyScraper:
                 "authorization": f"Bearer {self.token_v2}",
                 "Host": "service.privacy.com.br",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                 "Origin": "https://privacy.com.br",
                 "Referer": "https://privacy.com.br/",
             },
             allow_redirects=False,
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         if response.status_code in (301, 302, 303, 307, 308):
             location = response.headers.get("location")
@@ -503,7 +503,7 @@ class PrivacyScraper:
                 "Pragma": "no-cache",
                 "Priority": "u=1, i",
                 "Referer": "https://privacy.com.br/",
-                "Sec-CH-UA": '"Not-A.Brand";v="99", "Chromium";v="135", "Google Chrome";v="135"',
+                "Sec-CH-UA": '"Not-A.Brand";v="99", "Chromium";v="142", "Google Chrome";v="142"',
                 "Sec-CH-UA-Mobile": "?0",
                 "Sec-CH-UA-Platform": '"Windows"',
                 "Sec-Fetch-Dest": "empty",
@@ -511,7 +511,7 @@ class PrivacyScraper:
                 "Sec-Fetch-Site": "same-site",
                 "Sec-GPC": "1",
             },
-            impersonate="chrome120"
+            impersonate="chrome142"
         )
         return response.json() if response.status_code == 200 else None
 
@@ -551,7 +551,7 @@ class MediaDownloader:
         if is_video:
             if '.mp4' in final_url:
                 headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
                     "Sec-Fetch-Mode": "no-cors",
                     "Sec-Fetch-Dest": "video",
                     "Range": "bytes=0-"
@@ -569,8 +569,8 @@ class MediaDownloader:
                     "Host": "video.privacy.com.br",
                     "Connection": "keep-alive",
                     "sec-ch-ua-platform": '"Windows"',
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                    "sec-ch-ua": '"Brave";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+                    "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="142", "Google Chrome";v="142"',
                     "x-content-uri": urllib.parse.quote(content_uri_part),
                     "content": token_data['content'],
                     "sec-ch-ua-mobile": "?0",
@@ -591,7 +591,7 @@ class MediaDownloader:
             os.makedirs(target_dir, exist_ok=True)
 
         try:
-            response = self.session.get(final_url, headers=headers, impersonate="chrome120", stream=True)
+            response = self.session.get(final_url, headers=headers, impersonate="chrome142", stream=True)
             if response.status_code in (200, 206):
                 with open(filename, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
@@ -601,7 +601,7 @@ class MediaDownloader:
             return False
         except Exception:
             try:
-                response = self.session.get(final_url, headers=headers, impersonate="chrome120")
+                response = self.session.get(final_url, headers=headers, impersonate="chrome142")
                 if response.status_code in (200, 206):
                     with open(filename, 'wb') as f:
                         f.write(response.content)
